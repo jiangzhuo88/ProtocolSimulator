@@ -1,0 +1,7 @@
+Makefile
+.qmake.stash
+ProtocolSimulator
+*.o
+moc_*.cpp
+ui_*.h
+ProtocolSimulator.zip
