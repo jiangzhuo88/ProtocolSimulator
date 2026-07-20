@@ -20,6 +20,9 @@ public:
     explicit ProtocolEditDialog(ProtocolConfig &proto, QWidget *parent = nullptr);
     ProtocolConfig getProtocol() const;
 
+protected:
+    bool eventFilter(QObject *obj, QEvent *event) override;
+
 private slots:
     void onAddHeaderParam();
     void onRemoveHeaderParam();
@@ -35,6 +38,7 @@ private slots:
     void onCopyHeaderToReply();
     void onCopyDataToReply();
     void onCopyRecvToReply();
+    void onSwapByteOrder();
 
     // 右键菜单槽
     void onHeaderTableContextMenu(const QPoint &pos);

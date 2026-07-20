@@ -11,6 +11,7 @@
 #include <QJsonObject>
 #include <QMimeData>
 #include <QScrollArea>
+#include <QApplication>
 #include "collapsiblegroupbox.h"
 
 ProtocolEditDialog::ProtocolEditDialog(ProtocolConfig &proto, QWidget *parent)
@@ -115,6 +116,12 @@ void ProtocolEditDialog::setupUi()
     copyBtnLayout->addStretch();
     recvLayout->addLayout(copyBtnLayout);
 
+    auto utilBtnLayout = new QHBoxLayout;
+    auto btnSwapByteOrder = new QPushButton("一键切换所有字段大小端");
+    utilBtnLayout->addWidget(btnSwapByteOrder);
+    utilBtnLayout->addStretch();
+    recvLayout->addLayout(utilBtnLayout);
+
     tabWidget->addTab(recvTab, "接收协议配置");
 
     connect(btnAddHdr, &QPushButton::clicked, this, &ProtocolEditDialog::onAddHeaderParam);
@@ -124,6 +131,7 @@ void ProtocolEditDialog::setupUi()
     connect(btnCopyHeader, &QPushButton::clicked, this, &ProtocolEditDialog::onCopyHeaderToReply);
     connect(btnCopyData, &QPushButton::clicked, this, &ProtocolEditDialog::onCopyDataToReply);
     connect(btnCopyAll, &QPushButton::clicked, this, &ProtocolEditDialog::onCopyRecvToReply);
+    connect(btnSwapByteOrder, &QPushButton::clicked, this, &ProtocolEditDialog::onSwapByteOrder);
 
     connect(m_headerTable, &QTableWidget::customContextMenuRequested, this, &ProtocolEditDialog::onHeaderTableContextMenu);
     connect(m_dataTable, &QTableWidget::customContextMenuRequested, this, &ProtocolEditDialog::onDataTableContextMenu);
@@ -247,6 +255,8 @@ void ProtocolEditDialog::setupUi()
     auto *timer = new QTimer(this);
     timer->start(500);
     connect(timer, &QTimer::timeout, this, &ProtocolEditDialog::onPreviewTimer);
+
+    installEventFilter(this);
 }
 
 void ProtocolEditDialog::loadProtocol()
@@ -311,6 +321,7 @@ void ProtocolEditDialog::populateParamRow(QTableWidget *table, int row, const Pr
 
     // 类型 (1)
     auto typeCombo = new QComboBox;
+    typeCombo->setFocusPolicy(Qt::StrongFocus);
     for (int i = 0; i <= (int)ParamType::Hex; ++i)
         typeCombo->addItem(ProtocolParam::typeToString((ParamType)i));
     typeCombo->setCurrentIndex((int)param.type);
@@ -319,6 +330,7 @@ void ProtocolEditDialog::populateParamRow(QTableWidget *table, int row, const Pr
 
     // 字节序 (2)
     auto orderCombo = new QComboBox;
+    orderCombo->setFocusPolicy(Qt::StrongFocus);
     orderCombo->addItem("BigEndian");
     orderCombo->addItem("LittleEndian");
     orderCombo->setCurrentIndex((int)param.byteOrder);
@@ -331,6 +343,7 @@ void ProtocolEditDialog::populateParamRow(QTableWidget *table, int row, const Pr
 
     // 动态类型 (4)
     auto dynCombo = new QComboBox;
+    dynCombo->setFocusPolicy(Qt::StrongFocus);
     for (int i = 0; i <= (int)DynamicType::Sequence; ++i)
         dynCombo->addItem(ProtocolParam::dynamicTypeToString((DynamicType)i));
     dynCombo->setCurrentIndex((int)param.dynamicType);
@@ -377,6 +390,7 @@ void ProtocolEditDialog::populateParamRow(QTableWidget *table, int row, const Pr
 
         // 匹配模式 (7)
         auto matchModeCombo = new QComboBox;
+        matchModeCombo->setFocusPolicy(Qt::StrongFocus);
         for (int i = 0; i <= (int)MatchMode::Any; ++i)
             matchModeCombo->addItem(ProtocolParam::matchModeToString((MatchMode)i));
         matchModeCombo->setCurrentIndex((int)param.matchMode);
@@ -544,6 +558,17 @@ void ProtocolEditDialog::onPreviewTimer()
     updatePreview();
 }
 
+bool ProtocolEditDialog::eventFilter(QObject *obj, QEvent *event)
+{
+    if (event->type() == QEvent::Wheel) {
+        QWidget *focus = QApplication::focusWidget();
+        if (qobject_cast<QComboBox*>(focus)) {
+            return true;
+        }
+    }
+    return QDialog::eventFilter(obj, event);
+}
+
 void ProtocolEditDialog::onParamChanged()
 {
     if (m_loading) return;
@@ -600,6 +625,26 @@ void ProtocolEditDialog::onCopyRecvToReply()
 {
     onCopyHeaderToReply();
     onCopyDataToReply();
+}
+
+void ProtocolEditDialog::onSwapByteOrder()
+{
+    m_loading = true;
+    auto swapTable = [](QTableWidget *table) {
+        for (int i = 0; i < table->rowCount(); ++i) {
+            auto combo = qobject_cast<QComboBox*>(table->cellWidget(i, 2));
+            if (combo) {
+                int idx = combo->currentIndex();
+                combo->setCurrentIndex(idx == 0 ? 1 : 0);
+            }
+        }
+    };
+    swapTable(m_headerTable);
+    swapTable(m_dataTable);
+    swapTable(m_replyHeaderTable);
+    swapTable(m_replyDataTable);
+    m_loading = false;
+    updatePreview();
 }
 
 // ================== 右键菜单 ==================
