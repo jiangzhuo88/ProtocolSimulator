@@ -15,7 +15,7 @@ MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent), m_server(nullptr), m_currentSceneIndex(-1)
 {
     setupUi();
-    setWindowTitle("协议模拟训练软件");
+    setWindowTitle("模拟训练软件");
     resize(1200, 800);
 
     m_server = new SimTcpServer(this);

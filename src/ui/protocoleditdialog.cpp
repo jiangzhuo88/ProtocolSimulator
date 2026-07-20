@@ -10,6 +10,7 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QMimeData>
+#include <QScrollArea>
 #include "collapsiblegroupbox.h"
 
 ProtocolEditDialog::ProtocolEditDialog(ProtocolConfig &proto, QWidget *parent)
@@ -203,16 +204,30 @@ void ProtocolEditDialog::setupUi()
     auto previewGroup = new CollapsibleGroupBox("帧预览");
     auto previewContent = new QWidget;
     auto previewLayout = new QVBoxLayout(previewContent);
+    previewLayout->setContentsMargins(0, 0, 0, 0);
+
+    auto scrollArea = new QScrollArea;
+    scrollArea->setWidgetResizable(true);
+    scrollArea->setMaximumHeight(300);
+    auto scrollContent = new QWidget;
+    auto scrollLayout = new QVBoxLayout(scrollContent);
+    scrollLayout->setContentsMargins(0, 0, 0, 0);
+
     m_previewLabel = new QLabel;
     m_previewLabel->setStyleSheet("font-family: monospace; font-size: 13px; background: #f8f8f8; padding: 8px;");
     m_previewLabel->setWordWrap(true);
-    previewLayout->addWidget(new QLabel("接收帧(组包结果):"));
-    previewLayout->addWidget(m_previewLabel);
+    m_previewLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    scrollLayout->addWidget(new QLabel("接收帧(组包结果):"));
+    scrollLayout->addWidget(m_previewLabel);
     m_replyPreviewLabel = new QLabel;
     m_replyPreviewLabel->setStyleSheet("font-family: monospace; font-size: 13px; background: #f8f8f8; padding: 8px;");
     m_replyPreviewLabel->setWordWrap(true);
-    previewLayout->addWidget(new QLabel("回复帧(组包结果):"));
-    previewLayout->addWidget(m_replyPreviewLabel);
+    m_replyPreviewLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    scrollLayout->addWidget(new QLabel("回复帧(组包结果):"));
+    scrollLayout->addWidget(m_replyPreviewLabel);
+
+    scrollArea->setWidget(scrollContent);
+    previewLayout->addWidget(scrollArea);
     previewGroup->setContentWidget(previewContent);
     mainLayout->addWidget(previewGroup);
 
@@ -808,69 +823,127 @@ void ProtocolEditDialog::updateMatchHighlight(QTableWidget *table)
 
 void ProtocolEditDialog::updatePreview()
 {
-    // 先保存当前编辑状态
     saveProtocol();
 
-    // 构建接收帧预览
+    // 构建接收帧预览 (HTML格式)
     QByteArray frame = m_proto.buildFrame(0);
     QString hex = QString::fromLatin1(frame.toHex(' '));
 
-    // 构建字段详情
-    QString detail;
+    QString detail = "<pre style='font-family: monospace; font-size: 13px; margin: 0;'>";
     int offset = 0;
-    detail += "帧头:\n";
+    detail += "<b>帧头:</b><br>";
     for (const auto &p : m_proto.headerParams) {
         int sz = p.byteSize();
         QByteArray fieldData = frame.mid(offset, sz);
         QString fieldHex = QString::fromLatin1(fieldData.toHex(' '));
-        QString matchMark = p.matchEnabled ? " [匹配]" : "";
-        detail += QString("  偏移:%1  %2 (%3)  %4字节  值:%5%6\n")
-                  .arg(offset).arg(p.name)
+
+        QString matchInfo;
+        QString bgStyle;
+        if (p.matchEnabled) {
+            bgStyle = " style='background-color: #E8F5E9;'";
+            QString matchModeStr = ProtocolParam::matchModeToString(p.matchMode);
+            matchInfo = QString("<font color='green'> [匹配:%1]</font>").arg(matchModeStr);
+            if (p.matchMode == MatchMode::Range) {
+                matchInfo += QString("<font color='blue'> 期望范围:[%2, %3]</font>")
+                             .arg(p.matchValue).arg(p.matchValue2);
+            } else if (p.matchMode == MatchMode::Mask) {
+                matchInfo += QString("<font color='blue'> 掩码:%2 期望:%3</font>")
+                             .arg(p.matchValue).arg(p.matchValue2);
+            } else if (!p.matchValue.isEmpty()) {
+                matchInfo += QString("<font color='blue'> 期望:%2</font>").arg(p.matchValue);
+            }
+        }
+
+        detail += QString("<span%1>  偏移:%2  %3 (%4)  %5字节  值:%6%7</span><br>")
+                  .arg(bgStyle).arg(offset).arg(p.name)
                   .arg(ProtocolParam::typeToString(p.type))
-                  .arg(sz).arg(fieldHex).arg(matchMark);
+                  .arg(sz).arg(fieldHex).arg(matchInfo);
         offset += sz;
     }
-    detail += "数据区:\n";
+    detail += "<b>数据区:</b><br>";
     for (const auto &p : m_proto.dataParams) {
         int sz = p.byteSize();
         QByteArray fieldData = frame.mid(offset, sz);
         QString fieldHex = QString::fromLatin1(fieldData.toHex(' '));
-        QString matchMark = p.matchEnabled ? " [匹配]" : "";
-        detail += QString("  偏移:%1  %2 (%3)  %4字节  值:%5%6\n")
-                  .arg(offset).arg(p.name)
+
+        QString matchInfo;
+        QString bgStyle;
+        if (p.matchEnabled) {
+            bgStyle = " style='background-color: #E8F5E9;'";
+            QString matchModeStr = ProtocolParam::matchModeToString(p.matchMode);
+            matchInfo = QString("<font color='green'> [匹配:%1]</font>").arg(matchModeStr);
+            if (p.matchMode == MatchMode::Range) {
+                matchInfo += QString("<font color='blue'> 期望范围:[%2, %3]</font>")
+                             .arg(p.matchValue).arg(p.matchValue2);
+            } else if (p.matchMode == MatchMode::Mask) {
+                matchInfo += QString("<font color='blue'> 掩码:%2 期望:%3</font>")
+                             .arg(p.matchValue).arg(p.matchValue2);
+            } else if (!p.matchValue.isEmpty()) {
+                matchInfo += QString("<font color='blue'> 期望:%2</font>").arg(p.matchValue);
+            }
+        }
+
+        detail += QString("<span%1>  偏移:%2  %3 (%4)  %5字节  值:%6%7</span><br>")
+                  .arg(bgStyle).arg(offset).arg(p.name)
                   .arg(ProtocolParam::typeToString(p.type))
-                  .arg(sz).arg(fieldHex).arg(matchMark);
+                  .arg(sz).arg(fieldHex).arg(matchInfo);
         offset += sz;
     }
-    detail += QString("\n完整帧 (%1字节): %2").arg(frame.size()).arg(hex);
+    detail += QString("<br><b>完整帧 (%1字节):</b> %2").arg(frame.size()).arg(hex);
+    detail += "</pre>";
     m_previewLabel->setText(detail);
 
-    // 构建回复帧预览
+    // 构建回复帧预览 (HTML格式)
     QByteArray replyFrame = m_proto.buildReplyFrame(0);
     QString replyHex = QString::fromLatin1(replyFrame.toHex(' '));
 
-    QString replyDetail;
+    QString replyDetail = "<pre style='font-family: monospace; font-size: 13px; margin: 0;'>";
     int roffset = 0;
     for (const auto &p : m_proto.replyConfig.headerParams) {
         int sz = p.isRandom ? p.randomLength : p.byteSize();
         if (sz <= 0) sz = p.byteSize();
         QByteArray fieldData = replyFrame.mid(roffset, sz);
-        QString randMark = p.isRandom ? " [随机]" : "";
-        replyDetail += QString("  偏移:%1  %2  值:%3%4\n")
-                       .arg(roffset).arg(p.name)
-                       .arg(QString::fromLatin1(fieldData.toHex(' '))).arg(randMark);
+
+        QString randInfo;
+        QString bgStyle;
+        if (p.isRandom) {
+            bgStyle = " style='background-color: #E3F2FD;'";
+            randInfo = QString("<font color='orange'> [随机]</font>");
+            if (!p.randomMin.isEmpty() || !p.randomMax.isEmpty()) {
+                randInfo += QString("<font color='purple'> 范围:[%1, %2]</font>")
+                            .arg(p.randomMin.isEmpty() ? "0" : p.randomMin)
+                            .arg(p.randomMax.isEmpty() ? "max" : p.randomMax);
+            }
+        }
+
+        replyDetail += QString("<span%1>  偏移:%2  %3  值:%4%5</span><br>")
+                       .arg(bgStyle).arg(roffset).arg(p.name)
+                       .arg(QString::fromLatin1(fieldData.toHex(' '))).arg(randInfo);
         roffset += sz;
     }
     for (const auto &p : m_proto.replyConfig.dataParams) {
         int sz = p.isRandom ? p.randomLength : p.byteSize();
         if (sz <= 0) sz = p.byteSize();
         QByteArray fieldData = replyFrame.mid(roffset, sz);
-        QString randMark = p.isRandom ? " [随机]" : "";
-        replyDetail += QString("  偏移:%1  %2  值:%3%4\n")
-                       .arg(roffset).arg(p.name)
-                       .arg(QString::fromLatin1(fieldData.toHex(' '))).arg(randMark);
+
+        QString randInfo;
+        QString bgStyle;
+        if (p.isRandom) {
+            bgStyle = " style='background-color: #E3F2FD;'";
+            randInfo = QString("<font color='orange'> [随机]</font>");
+            if (!p.randomMin.isEmpty() || !p.randomMax.isEmpty()) {
+                randInfo += QString("<font color='purple'> 范围:[%1, %2]</font>")
+                            .arg(p.randomMin.isEmpty() ? "0" : p.randomMin)
+                            .arg(p.randomMax.isEmpty() ? "max" : p.randomMax);
+            }
+        }
+
+        replyDetail += QString("<span%1>  偏移:%2  %3  值:%4%5</span><br>")
+                       .arg(bgStyle).arg(roffset).arg(p.name)
+                       .arg(QString::fromLatin1(fieldData.toHex(' '))).arg(randInfo);
         roffset += sz;
     }
-    replyDetail += QString("\n完整回复帧 (%1字节): %2").arg(replyFrame.size()).arg(replyHex);
+    replyDetail += QString("<br><b>完整回复帧 (%1字节):</b> %2").arg(replyFrame.size()).arg(replyHex);
+    replyDetail += "</pre>";
     m_replyPreviewLabel->setText(replyDetail);
 }
