@@ -21,6 +21,7 @@ private slots:
     void onAddProtocol();
     void onEditProtocol();
     void onDeleteProtocol();
+    void onCopyProtocol();
     void onSceneSelectionChanged();
     void onStartService();
     void onStopService();
@@ -48,6 +49,7 @@ private:
     QPushButton *m_btnSceneMgmt;
     QPushButton *m_btnAddProto;
     QPushButton *m_btnEditProto;
+    QPushButton *m_btnCopyProto;
     QPushButton *m_btnDelProto;
     QLabel *m_statusLabel;
 };

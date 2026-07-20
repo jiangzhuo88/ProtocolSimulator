@@ -45,6 +45,7 @@ void MainWindow::setupUi()
     m_btnSceneMgmt = new QPushButton("场景管理");
     m_btnAddProto = new QPushButton("添加协议");
     m_btnEditProto = new QPushButton("编辑协议");
+    m_btnCopyProto = new QPushButton("复制协议");
     m_btnDelProto = new QPushButton("删除协议");
     m_btnStart = new QPushButton("启动服务");
     m_btnStop = new QPushButton("停止服务");
@@ -53,6 +54,7 @@ void MainWindow::setupUi()
     toolbarLayout->addWidget(m_btnSceneMgmt);
     toolbarLayout->addWidget(m_btnAddProto);
     toolbarLayout->addWidget(m_btnEditProto);
+    toolbarLayout->addWidget(m_btnCopyProto);
     toolbarLayout->addWidget(m_btnDelProto);
     toolbarLayout->addStretch();
     toolbarLayout->addWidget(m_btnStart);
@@ -103,6 +105,7 @@ void MainWindow::setupUi()
     connect(m_btnSceneMgmt, &QPushButton::clicked, this, &MainWindow::onSceneManagement);
     connect(m_btnAddProto, &QPushButton::clicked, this, &MainWindow::onAddProtocol);
     connect(m_btnEditProto, &QPushButton::clicked, this, &MainWindow::onEditProtocol);
+    connect(m_btnCopyProto, &QPushButton::clicked, this, &MainWindow::onCopyProtocol);
     connect(m_btnDelProto, &QPushButton::clicked, this, &MainWindow::onDeleteProtocol);
     connect(m_btnStart, &QPushButton::clicked, this, &MainWindow::onStartService);
     connect(m_btnStop, &QPushButton::clicked, this, &MainWindow::onStopService);
@@ -244,6 +247,22 @@ void MainWindow::onProtocolDoubleClicked(int row, int)
         if (m_server && m_server->isRunning())
             m_server->setProtocols(m_config.scenes()[m_currentSceneIndex].protocols);
     }
+}
+
+void MainWindow::onCopyProtocol()
+{
+    int row = m_protocolTable->currentRow();
+    if (row < 0) {
+        QMessageBox::warning(this, "提示", "请先选择一个协议");
+        return;
+    }
+    ProtocolConfig proto = m_config.scenes()[m_currentSceneIndex].protocols[row];
+    proto.name += " (副本)";
+    m_config.scenes()[m_currentSceneIndex].protocols.append(proto);
+    refreshProtocolTable();
+    autoSave();
+    if (m_server && m_server->isRunning())
+        m_server->setProtocols(m_config.scenes()[m_currentSceneIndex].protocols);
 }
 
 void MainWindow::onDeleteProtocol()

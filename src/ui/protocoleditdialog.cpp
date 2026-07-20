@@ -95,12 +95,25 @@ void ProtocolEditDialog::setupUi()
     dataGroup->setContentWidget(dataContent);
     recvLayout->addWidget(dataGroup);
 
+    auto copyBtnLayout = new QHBoxLayout;
+    auto btnCopyHeader = new QPushButton("复制帧头到回复帧头");
+    auto btnCopyData = new QPushButton("复制数据区到回复数据区");
+    auto btnCopyAll = new QPushButton("复制全部接收配置到回复");
+    copyBtnLayout->addWidget(btnCopyHeader);
+    copyBtnLayout->addWidget(btnCopyData);
+    copyBtnLayout->addWidget(btnCopyAll);
+    copyBtnLayout->addStretch();
+    recvLayout->addLayout(copyBtnLayout);
+
     tabWidget->addTab(recvTab, "接收协议配置");
 
     connect(btnAddHdr, &QPushButton::clicked, this, &ProtocolEditDialog::onAddHeaderParam);
     connect(btnDelHdr, &QPushButton::clicked, this, &ProtocolEditDialog::onRemoveHeaderParam);
     connect(btnAddData, &QPushButton::clicked, this, &ProtocolEditDialog::onAddDataParam);
     connect(btnDelData, &QPushButton::clicked, this, &ProtocolEditDialog::onRemoveDataParam);
+    connect(btnCopyHeader, &QPushButton::clicked, this, &ProtocolEditDialog::onCopyHeaderToReply);
+    connect(btnCopyData, &QPushButton::clicked, this, &ProtocolEditDialog::onCopyDataToReply);
+    connect(btnCopyAll, &QPushButton::clicked, this, &ProtocolEditDialog::onCopyRecvToReply);
 
     // ====== Tab2: 回复配置 ======
     auto replyTab = new QWidget;
@@ -505,6 +518,56 @@ void ProtocolEditDialog::onParamChanged()
     updateMatchHighlight(m_headerTable);
     updateMatchHighlight(m_dataTable);
     updatePreview();
+}
+
+void ProtocolEditDialog::onCopyHeaderToReply()
+{
+    m_loading = true;
+    m_replyHeaderTable->setRowCount(0);
+    for (int i = 0; i < m_headerTable->rowCount(); ++i) {
+        ProtocolParam p = readParamRow(m_headerTable, i, false);
+        p.matchEnabled = false;
+        p.matchMode = MatchMode::Exact;
+        p.matchValue = "";
+        p.matchValue2 = "";
+        p.isRandom = false;
+        p.randomMin = "";
+        p.randomMax = "";
+        p.randomLength = 1;
+        int row = m_replyHeaderTable->rowCount();
+        m_replyHeaderTable->insertRow(row);
+        populateParamRow(m_replyHeaderTable, row, p, true);
+    }
+    m_loading = false;
+    updatePreview();
+}
+
+void ProtocolEditDialog::onCopyDataToReply()
+{
+    m_loading = true;
+    m_replyDataTable->setRowCount(0);
+    for (int i = 0; i < m_dataTable->rowCount(); ++i) {
+        ProtocolParam p = readParamRow(m_dataTable, i, false);
+        p.matchEnabled = false;
+        p.matchMode = MatchMode::Exact;
+        p.matchValue = "";
+        p.matchValue2 = "";
+        p.isRandom = false;
+        p.randomMin = "";
+        p.randomMax = "";
+        p.randomLength = 1;
+        int row = m_replyDataTable->rowCount();
+        m_replyDataTable->insertRow(row);
+        populateParamRow(m_replyDataTable, row, p, true);
+    }
+    m_loading = false;
+    updatePreview();
+}
+
+void ProtocolEditDialog::onCopyRecvToReply()
+{
+    onCopyHeaderToReply();
+    onCopyDataToReply();
 }
 
 void ProtocolEditDialog::updateMatchHighlight(QTableWidget *table)

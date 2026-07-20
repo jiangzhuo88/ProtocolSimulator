@@ -32,6 +32,9 @@ private slots:
     void onReplyModeChanged(int index);
     void onPreviewTimer();
     void onParamChanged();
+    void onCopyHeaderToReply();
+    void onCopyDataToReply();
+    void onCopyRecvToReply();
 
 private:
     void setupUi();
