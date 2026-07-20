@@ -36,6 +36,12 @@ private slots:
     void onCopyDataToReply();
     void onCopyRecvToReply();
 
+    // 右键菜单槽
+    void onHeaderTableContextMenu(const QPoint &pos);
+    void onDataTableContextMenu(const QPoint &pos);
+    void onReplyHeaderTableContextMenu(const QPoint &pos);
+    void onReplyDataTableContextMenu(const QPoint &pos);
+
 private:
     void setupUi();
     void loadProtocol();
@@ -47,6 +53,13 @@ private:
     void populateParamRow(QTableWidget *table, int row, const ProtocolParam &param, bool isReplyTable);
     ProtocolParam readParamRow(QTableWidget *table, int row, bool isReplyTable);
     void addParamRow(QTableWidget *table, bool isReplyTable);
+
+    // 复制粘贴辅助函数
+    void copyTableSelection(QTableWidget *table, bool isReplyTable);
+    void copyTableAll(QTableWidget *table, bool isReplyTable);
+    void pasteToTable(QTableWidget *table, bool isReplyTable);
+    static QByteArray paramsToClipboardData(const QVector<ProtocolParam> &params, bool isReplyTable);
+    static QVector<ProtocolParam> paramsFromClipboardData(const QByteArray &data, bool &outIsReplyTable);
 
     ProtocolConfig &m_proto;
 

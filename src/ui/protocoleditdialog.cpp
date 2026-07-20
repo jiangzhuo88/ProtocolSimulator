@@ -3,6 +3,13 @@
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QTimer>
+#include <QMenu>
+#include <QClipboard>
+#include <QGuiApplication>
+#include <QJsonDocument>
+#include <QJsonArray>
+#include <QJsonObject>
+#include <QMimeData>
 #include "collapsiblegroupbox.h"
 
 ProtocolEditDialog::ProtocolEditDialog(ProtocolConfig &proto, QWidget *parent)
@@ -58,13 +65,14 @@ void ProtocolEditDialog::setupUi()
     auto recvLayout = new QVBoxLayout(recvTab);
 
     // 帧头参数
-    auto hdrGroup = new CollapsibleGroupBox("帧头参数 (勾选'匹配'列启用字段匹配)");
+    auto hdrGroup = new CollapsibleGroupBox("帧头参数 (右键支持复制/粘贴)");
     auto hdrContent = new QWidget;
     auto hdrLayout = new QVBoxLayout(hdrContent);
     m_headerTable = new QTableWidget(0, 10);
     m_headerTable->setHorizontalHeaderLabels({"名称","类型","字节序","默认值","动态类型","动态参数","匹配","匹配模式","匹配值","匹配值2"});
     for (int i = 0; i < 10; ++i)
         m_headerTable->horizontalHeader()->setSectionResizeMode(i, QHeaderView::Stretch);
+    m_headerTable->setContextMenuPolicy(Qt::CustomContextMenu);
     hdrLayout->addWidget(m_headerTable);
     auto hdrBtnLayout = new QHBoxLayout;
     auto btnAddHdr = new QPushButton("添加帧头参数");
@@ -77,13 +85,14 @@ void ProtocolEditDialog::setupUi()
     recvLayout->addWidget(hdrGroup);
 
     // 数据区参数
-    auto dataGroup = new CollapsibleGroupBox("数据区参数");
+    auto dataGroup = new CollapsibleGroupBox("数据区参数 (右键支持复制/粘贴)");
     auto dataContent = new QWidget;
     auto dataLayout = new QVBoxLayout(dataContent);
     m_dataTable = new QTableWidget(0, 10);
     m_dataTable->setHorizontalHeaderLabels({"名称","类型","字节序","默认值","动态类型","动态参数","匹配","匹配模式","匹配值","匹配值2"});
     for (int i = 0; i < 10; ++i)
         m_dataTable->horizontalHeader()->setSectionResizeMode(i, QHeaderView::Stretch);
+    m_dataTable->setContextMenuPolicy(Qt::CustomContextMenu);
     dataLayout->addWidget(m_dataTable);
     auto dataBtnLayout = new QHBoxLayout;
     auto btnAddData = new QPushButton("添加数据区参数");
@@ -115,6 +124,9 @@ void ProtocolEditDialog::setupUi()
     connect(btnCopyData, &QPushButton::clicked, this, &ProtocolEditDialog::onCopyDataToReply);
     connect(btnCopyAll, &QPushButton::clicked, this, &ProtocolEditDialog::onCopyRecvToReply);
 
+    connect(m_headerTable, &QTableWidget::customContextMenuRequested, this, &ProtocolEditDialog::onHeaderTableContextMenu);
+    connect(m_dataTable, &QTableWidget::customContextMenuRequested, this, &ProtocolEditDialog::onDataTableContextMenu);
+
     // ====== Tab2: 回复配置 ======
     auto replyTab = new QWidget;
     auto replyLayout = new QVBoxLayout(replyTab);
@@ -134,13 +146,14 @@ void ProtocolEditDialog::setupUi()
     replyLayout->addLayout(modeLayout);
 
     // 回复帧头参数
-    auto rplHdrGroup = new CollapsibleGroupBox("回复帧头参数 (支持随机值)");
+    auto rplHdrGroup = new CollapsibleGroupBox("回复帧头参数 (右键支持复制/粘贴)");
     auto rplHdrContent = new QWidget;
     auto rplHdrLayout = new QVBoxLayout(rplHdrContent);
     m_replyHeaderTable = new QTableWidget(0, 10);
     m_replyHeaderTable->setHorizontalHeaderLabels({"名称","类型","字节序","默认值","动态类型","动态参数","随机","随机最小","随机最大","随机长度"});
     for (int i = 0; i < 10; ++i)
         m_replyHeaderTable->horizontalHeader()->setSectionResizeMode(i, QHeaderView::Stretch);
+    m_replyHeaderTable->setContextMenuPolicy(Qt::CustomContextMenu);
     rplHdrLayout->addWidget(m_replyHeaderTable);
     auto rplHdrBtnLayout = new QHBoxLayout;
     auto btnAddRplHdr = new QPushButton("添加回复帧头参数");
@@ -153,13 +166,14 @@ void ProtocolEditDialog::setupUi()
     replyLayout->addWidget(rplHdrGroup);
 
     // 回复数据区参数
-    auto rplDataGroup = new CollapsibleGroupBox("回复数据区参数 (支持随机值)");
+    auto rplDataGroup = new CollapsibleGroupBox("回复数据区参数 (右键支持复制/粘贴)");
     auto rplDataContent = new QWidget;
     auto rplDataLayout = new QVBoxLayout(rplDataContent);
     m_replyDataTable = new QTableWidget(0, 10);
     m_replyDataTable->setHorizontalHeaderLabels({"名称","类型","字节序","默认值","动态类型","动态参数","随机","随机最小","随机最大","随机长度"});
     for (int i = 0; i < 10; ++i)
         m_replyDataTable->horizontalHeader()->setSectionResizeMode(i, QHeaderView::Stretch);
+    m_replyDataTable->setContextMenuPolicy(Qt::CustomContextMenu);
     rplDataLayout->addWidget(m_replyDataTable);
     auto rplDataBtnLayout = new QHBoxLayout;
     auto btnAddRplData = new QPushButton("添加回复数据区参数");
@@ -179,6 +193,9 @@ void ProtocolEditDialog::setupUi()
     connect(btnDelRplData, &QPushButton::clicked, this, &ProtocolEditDialog::onRemoveReplyDataParam);
     connect(m_replyModeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &ProtocolEditDialog::onReplyModeChanged);
     connect(m_replyIntervalSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &ProtocolEditDialog::onParamChanged);
+
+    connect(m_replyHeaderTable, &QTableWidget::customContextMenuRequested, this, &ProtocolEditDialog::onReplyHeaderTableContextMenu);
+    connect(m_replyDataTable, &QTableWidget::customContextMenuRequested, this, &ProtocolEditDialog::onReplyDataTableContextMenu);
 
     mainLayout->addWidget(tabWidget);
 
@@ -568,6 +585,212 @@ void ProtocolEditDialog::onCopyRecvToReply()
 {
     onCopyHeaderToReply();
     onCopyDataToReply();
+}
+
+// ================== 右键菜单 ==================
+
+void ProtocolEditDialog::onHeaderTableContextMenu(const QPoint &pos)
+{
+    QMenu menu(this);
+    auto actCopySel = menu.addAction("复制选中行");
+    auto actCopyAll = menu.addAction("复制整表");
+    auto actPaste = menu.addAction("粘贴");
+    auto actClear = menu.addAction("清空整表");
+    auto actDel = menu.addAction("删除选中行");
+
+    QAction *selected = menu.exec(m_headerTable->viewport()->mapToGlobal(pos));
+    if (selected == actCopySel) copyTableSelection(m_headerTable, false);
+    else if (selected == actCopyAll) copyTableAll(m_headerTable, false);
+    else if (selected == actPaste) pasteToTable(m_headerTable, false);
+    else if (selected == actClear) { m_headerTable->setRowCount(0); updatePreview(); }
+    else if (selected == actDel) onRemoveHeaderParam();
+}
+
+void ProtocolEditDialog::onDataTableContextMenu(const QPoint &pos)
+{
+    QMenu menu(this);
+    auto actCopySel = menu.addAction("复制选中行");
+    auto actCopyAll = menu.addAction("复制整表");
+    auto actPaste = menu.addAction("粘贴");
+    auto actClear = menu.addAction("清空整表");
+    auto actDel = menu.addAction("删除选中行");
+
+    QAction *selected = menu.exec(m_dataTable->viewport()->mapToGlobal(pos));
+    if (selected == actCopySel) copyTableSelection(m_dataTable, false);
+    else if (selected == actCopyAll) copyTableAll(m_dataTable, false);
+    else if (selected == actPaste) pasteToTable(m_dataTable, false);
+    else if (selected == actClear) { m_dataTable->setRowCount(0); updatePreview(); }
+    else if (selected == actDel) onRemoveDataParam();
+}
+
+void ProtocolEditDialog::onReplyHeaderTableContextMenu(const QPoint &pos)
+{
+    QMenu menu(this);
+    auto actCopySel = menu.addAction("复制选中行");
+    auto actCopyAll = menu.addAction("复制整表");
+    auto actPaste = menu.addAction("粘贴");
+    auto actClear = menu.addAction("清空整表");
+    auto actDel = menu.addAction("删除选中行");
+
+    QAction *selected = menu.exec(m_replyHeaderTable->viewport()->mapToGlobal(pos));
+    if (selected == actCopySel) copyTableSelection(m_replyHeaderTable, true);
+    else if (selected == actCopyAll) copyTableAll(m_replyHeaderTable, true);
+    else if (selected == actPaste) pasteToTable(m_replyHeaderTable, true);
+    else if (selected == actClear) { m_replyHeaderTable->setRowCount(0); updatePreview(); }
+    else if (selected == actDel) onRemoveReplyHeaderParam();
+}
+
+void ProtocolEditDialog::onReplyDataTableContextMenu(const QPoint &pos)
+{
+    QMenu menu(this);
+    auto actCopySel = menu.addAction("复制选中行");
+    auto actCopyAll = menu.addAction("复制整表");
+    auto actPaste = menu.addAction("粘贴");
+    auto actClear = menu.addAction("清空整表");
+    auto actDel = menu.addAction("删除选中行");
+
+    QAction *selected = menu.exec(m_replyDataTable->viewport()->mapToGlobal(pos));
+    if (selected == actCopySel) copyTableSelection(m_replyDataTable, true);
+    else if (selected == actCopyAll) copyTableAll(m_replyDataTable, true);
+    else if (selected == actPaste) pasteToTable(m_replyDataTable, true);
+    else if (selected == actClear) { m_replyDataTable->setRowCount(0); updatePreview(); }
+    else if (selected == actDel) onRemoveReplyDataParam();
+}
+
+// ================== 复制粘贴实现 ==================
+
+QByteArray ProtocolEditDialog::paramsToClipboardData(const QVector<ProtocolParam> &params, bool isReplyTable)
+{
+    QJsonArray arr;
+    for (const auto &p : params) {
+        QJsonObject obj;
+        obj["name"] = p.name;
+        obj["type"] = (int)p.type;
+        obj["byteOrder"] = (int)p.byteOrder;
+        obj["defaultValue"] = p.defaultValue;
+        obj["dynamicType"] = (int)p.dynamicType;
+        obj["dynamicParam"] = p.dynamicParam;
+        obj["matchEnabled"] = p.matchEnabled;
+        obj["matchMode"] = (int)p.matchMode;
+        obj["matchValue"] = p.matchValue;
+        obj["matchValue2"] = p.matchValue2;
+        obj["isRandom"] = p.isRandom;
+        obj["randomMin"] = p.randomMin;
+        obj["randomMax"] = p.randomMax;
+        obj["randomLength"] = p.randomLength;
+        arr.append(obj);
+    }
+    QJsonObject root;
+    root["version"] = 1;
+    root["isReplyTable"] = isReplyTable;
+    root["params"] = arr;
+    return QJsonDocument(root).toJson(QJsonDocument::Compact);
+}
+
+QVector<ProtocolParam> ProtocolEditDialog::paramsFromClipboardData(const QByteArray &data, bool &outIsReplyTable)
+{
+    outIsReplyTable = false;
+    QVector<ProtocolParam> result;
+    QJsonDocument doc = QJsonDocument::fromJson(data);
+    if (!doc.isObject()) return result;
+    QJsonObject root = doc.object();
+    outIsReplyTable = root["isReplyTable"].toBool();
+    QJsonArray arr = root["params"].toArray();
+    for (const auto &v : arr) {
+        if (!v.isObject()) continue;
+        QJsonObject obj = v.toObject();
+        ProtocolParam p;
+        p.name = obj["name"].toString();
+        p.type = (ParamType)obj["type"].toInt();
+        p.byteOrder = (ByteOrder)obj["byteOrder"].toInt();
+        p.defaultValue = obj["defaultValue"].toString();
+        p.dynamicType = (DynamicType)obj["dynamicType"].toInt();
+        p.dynamicParam = obj["dynamicParam"].toInt();
+        p.matchEnabled = obj["matchEnabled"].toBool();
+        p.matchMode = (MatchMode)obj["matchMode"].toInt();
+        p.matchValue = obj["matchValue"].toString();
+        p.matchValue2 = obj["matchValue2"].toString();
+        p.isRandom = obj["isRandom"].toBool();
+        p.randomMin = obj["randomMin"].toString();
+        p.randomMax = obj["randomMax"].toString();
+        p.randomLength = obj["randomLength"].toInt(1);
+        result.append(p);
+    }
+    return result;
+}
+
+void ProtocolEditDialog::copyTableSelection(QTableWidget *table, bool isReplyTable)
+{
+    QVector<ProtocolParam> params;
+    QSet<int> selectedRows;
+    for (const auto &item : table->selectedItems())
+        selectedRows.insert(item->row());
+    QList<int> rows = selectedRows.values();
+    std::sort(rows.begin(), rows.end());
+    for (int r : rows)
+        params.append(readParamRow(table, r, isReplyTable));
+
+    if (params.isEmpty()) return;
+    QByteArray data = paramsToClipboardData(params, isReplyTable);
+    QMimeData *mime = new QMimeData;
+    mime->setData("application/x-protocolsim-params", data);
+    mime->setText(QString::fromUtf8(data));
+    QGuiApplication::clipboard()->setMimeData(mime);
+}
+
+void ProtocolEditDialog::copyTableAll(QTableWidget *table, bool isReplyTable)
+{
+    QVector<ProtocolParam> params;
+    for (int i = 0; i < table->rowCount(); ++i)
+        params.append(readParamRow(table, i, isReplyTable));
+    if (params.isEmpty()) return;
+    QByteArray data = paramsToClipboardData(params, isReplyTable);
+    QMimeData *mime = new QMimeData;
+    mime->setData("application/x-protocolsim-params", data);
+    mime->setText(QString::fromUtf8(data));
+    QGuiApplication::clipboard()->setMimeData(mime);
+}
+
+void ProtocolEditDialog::pasteToTable(QTableWidget *table, bool isReplyTable)
+{
+    const QMimeData *mime = QGuiApplication::clipboard()->mimeData();
+    if (!mime) return;
+
+    QByteArray data;
+    if (mime->hasFormat("application/x-protocolsim-params"))
+        data = mime->data("application/x-protocolsim-params");
+    else if (mime->hasText())
+        data = mime->text().toUtf8();
+    else
+        return;
+
+    bool srcIsReply = false;
+    QVector<ProtocolParam> params = paramsFromClipboardData(data, srcIsReply);
+    if (params.isEmpty()) return;
+
+    m_loading = true;
+    for (const auto &p : params) {
+        ProtocolParam np = p;
+        // 如果源和目标表类型不同，做字段适配
+        if (isReplyTable && !srcIsReply) {
+            // 从接收表粘贴到回复表：清除匹配字段
+            np.matchEnabled = false;
+            np.matchMode = MatchMode::Exact;
+            np.matchValue = "";
+            np.matchValue2 = "";
+        } else if (!isReplyTable && srcIsReply) {
+            // 从回复表粘贴到接收表：清除随机字段
+            np.isRandom = false;
+            np.randomMin = "";
+            np.randomMax = "";
+            np.randomLength = 1;
+        }
+        int row = table->rowCount();
+        table->insertRow(row);
+        populateParamRow(table, row, np, isReplyTable);
+    }
+    m_loading = false;
+    updatePreview();
 }
 
 void ProtocolEditDialog::updateMatchHighlight(QTableWidget *table)
