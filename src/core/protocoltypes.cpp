@@ -270,15 +270,128 @@ QString ProtocolParam::fromBytes(const QByteArray &data, ParamType type, ByteOrd
     return QString();
 }
 
+QByteArray ProtocolParam::matchValueToBytes(const QString &value) const
+{
+    // 数值类型: 按字段类型和字节序序列化(与defaultValue处理方式一致)
+    switch (type) {
+    case ParamType::UInt8: {
+        bool ok;
+        quint8 v = value.toUInt(&ok, 0);
+        return QByteArray(1, (char)v);
+    }
+    case ParamType::Int8: {
+        bool ok;
+        qint8 v = value.toInt(&ok, 0);
+        return QByteArray(1, (char)v);
+    }
+    case ParamType::UInt16: {
+        bool ok;
+        quint16 v = value.toUInt(&ok, 0);
+        QByteArray data;
+        QDataStream ds(&data, QIODevice::WriteOnly);
+        ds.setByteOrder(byteOrder == ByteOrder::BigEndian ? QDataStream::BigEndian : QDataStream::LittleEndian);
+        ds << v;
+        return data;
+    }
+    case ParamType::Int16: {
+        bool ok;
+        qint16 v = value.toInt(&ok, 0);
+        QByteArray data;
+        QDataStream ds(&data, QIODevice::WriteOnly);
+        ds.setByteOrder(byteOrder == ByteOrder::BigEndian ? QDataStream::BigEndian : QDataStream::LittleEndian);
+        ds << v;
+        return data;
+    }
+    case ParamType::UInt32: {
+        bool ok;
+        quint32 v = value.toUInt(&ok, 0);
+        QByteArray data;
+        QDataStream ds(&data, QIODevice::WriteOnly);
+        ds.setByteOrder(byteOrder == ByteOrder::BigEndian ? QDataStream::BigEndian : QDataStream::LittleEndian);
+        ds << v;
+        return data;
+    }
+    case ParamType::Int32: {
+        bool ok;
+        qint32 v = value.toInt(&ok, 0);
+        QByteArray data;
+        QDataStream ds(&data, QIODevice::WriteOnly);
+        ds.setByteOrder(byteOrder == ByteOrder::BigEndian ? QDataStream::BigEndian : QDataStream::LittleEndian);
+        ds << v;
+        return data;
+    }
+    case ParamType::UInt64: {
+        bool ok;
+        quint64 v = value.toULongLong(&ok, 0);
+        QByteArray data;
+        QDataStream ds(&data, QIODevice::WriteOnly);
+        ds.setByteOrder(byteOrder == ByteOrder::BigEndian ? QDataStream::BigEndian : QDataStream::LittleEndian);
+        ds << v;
+        return data;
+    }
+    case ParamType::Int64: {
+        bool ok;
+        qint64 v = value.toLongLong(&ok, 0);
+        QByteArray data;
+        QDataStream ds(&data, QIODevice::WriteOnly);
+        ds.setByteOrder(byteOrder == ByteOrder::BigEndian ? QDataStream::BigEndian : QDataStream::LittleEndian);
+        ds << v;
+        return data;
+    }
+    case ParamType::Float32: {
+        float v = value.toFloat();
+        QByteArray data;
+        QDataStream ds(&data, QIODevice::WriteOnly);
+        ds.setFloatingPointPrecision(QDataStream::SinglePrecision);
+        ds.setByteOrder(byteOrder == ByteOrder::BigEndian ? QDataStream::BigEndian : QDataStream::LittleEndian);
+        ds << v;
+        return data;
+    }
+    case ParamType::Float64: {
+        double v = value.toDouble();
+        QByteArray data;
+        QDataStream ds(&data, QIODevice::WriteOnly);
+        ds.setFloatingPointPrecision(QDataStream::DoublePrecision);
+        ds.setByteOrder(byteOrder == ByteOrder::BigEndian ? QDataStream::BigEndian : QDataStream::LittleEndian);
+        ds << v;
+        return data;
+    }
+    case ParamType::String:
+        return value.toLatin1();
+    case ParamType::StringUtf8:
+        return value.toUtf8();
+    case ParamType::Bytes:
+    case ParamType::Hex: {
+        // 去掉0x/0X前缀, 再fromHex
+        QString s = value;
+        s.remove(' ').remove('\n').remove('\t');
+        if (s.startsWith("0x", Qt::CaseInsensitive))
+            s.remove(0, 2);
+        return QByteArray::fromHex(s.toLatin1());
+    }
+    }
+    return QByteArray();
+}
+
 bool ProtocolParam::match(const QByteArray &received) const
 {
     if (!matchEnabled) return true; // 未启用匹配，默认通过
 
     if (matchMode == MatchMode::Any) return true;
 
-    QString mv = matchValue;
-    mv.remove(' ');
-    QByteArray expected = QByteArray::fromHex(mv.toLatin1());
+    if (matchMode == MatchMode::Range) {
+        // 范围匹配: 对数值类型, 将received解码为数值后比较
+        QString recvStr = fromBytes(received, type, byteOrder);
+        bool ok1, ok2;
+        qint64 recvVal = recvStr.toLongLong(&ok1, 0);
+        qint64 minVal = matchValue.toLongLong(&ok1, 0);
+        qint64 maxVal = matchValue2.toLongLong(&ok2, 0);
+        if (!ok1 || !ok2) return false;
+        return recvVal >= minVal && recvVal <= maxVal;
+    }
+
+    // 精确/前缀/掩码匹配: 用matchValueToBytes转换(自动处理0x前缀和字节序)
+    QByteArray expected = matchValueToBytes(matchValue);
 
     if (matchMode == MatchMode::Exact) {
         return received == expected;
@@ -290,26 +403,13 @@ bool ProtocolParam::match(const QByteArray &received) const
 
     if (matchMode == MatchMode::Mask) {
         QByteArray mask = expected;
-        QString mv2 = matchValue2;
-        mv2.remove(' ');
-        QByteArray expVal = QByteArray::fromHex(mv2.toLatin1());
+        QByteArray expVal = matchValueToBytes(matchValue2);
         if (received.size() != mask.size()) return false;
         for (int i = 0; i < received.size(); ++i) {
             if ((quint8)(received[i] & mask[i]) != (quint8)expVal[i])
                 return false;
         }
         return true;
-    }
-
-    if (matchMode == MatchMode::Range) {
-        // 对整数类型做范围匹配
-        bool ok1, ok2;
-        QString recvStr = fromBytes(received, type, byteOrder);
-        qint64 recvVal = recvStr.toLongLong(&ok1, 0);
-        qint64 minVal = matchValue.toLongLong(&ok1, 0);
-        qint64 maxVal = matchValue2.toLongLong(&ok2, 0);
-        if (!ok1 || !ok2) return false;
-        return recvVal >= minVal && recvVal <= maxVal;
     }
 
     return false;

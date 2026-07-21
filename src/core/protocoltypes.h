@@ -100,6 +100,8 @@ struct ProtocolParam {
     static QString fromBytes(const QByteArray &data, ParamType type, ByteOrder order);
     // 匹配检查: received为收到的该字段字节
     bool match(const QByteArray &received) const;
+    // 将匹配值字符串转为字节序列(考虑字段类型和字节序)
+    QByteArray matchValueToBytes(const QString &value) const;
 
     QJsonObject toJson() const;
     void fromJson(const QJsonObject &obj);
