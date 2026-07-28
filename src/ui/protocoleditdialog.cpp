@@ -71,7 +71,7 @@ void ProtocolEditDialog::setupUi()
     auto hdrContent = new QWidget;
     auto hdrLayout = new QVBoxLayout(hdrContent);
     m_headerTable = new QTableWidget(0, 10);
-    m_headerTable->setHorizontalHeaderLabels({"名称","类型","字节序","默认值","动态类型","动态参数","匹配","匹配模式","匹配值","匹配值2"});
+    m_headerTable->setHorizontalHeaderLabels({"名称","类型","字节序/长度","默认值","动态类型","动态参数","匹配","匹配模式","匹配值","匹配值2"});
     for (int i = 0; i < 10; ++i)
         m_headerTable->horizontalHeader()->setSectionResizeMode(i, QHeaderView::Stretch);
     m_headerTable->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -91,7 +91,7 @@ void ProtocolEditDialog::setupUi()
     auto dataContent = new QWidget;
     auto dataLayout = new QVBoxLayout(dataContent);
     m_dataTable = new QTableWidget(0, 10);
-    m_dataTable->setHorizontalHeaderLabels({"名称","类型","字节序","默认值","动态类型","动态参数","匹配","匹配模式","匹配值","匹配值2"});
+    m_dataTable->setHorizontalHeaderLabels({"名称","类型","字节序/长度","默认值","动态类型","动态参数","匹配","匹配模式","匹配值","匹配值2"});
     for (int i = 0; i < 10; ++i)
         m_dataTable->horizontalHeader()->setSectionResizeMode(i, QHeaderView::Stretch);
     m_dataTable->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -159,7 +159,7 @@ void ProtocolEditDialog::setupUi()
     auto rplHdrContent = new QWidget;
     auto rplHdrLayout = new QVBoxLayout(rplHdrContent);
     m_replyHeaderTable = new QTableWidget(0, 10);
-    m_replyHeaderTable->setHorizontalHeaderLabels({"名称","类型","字节序","默认值","动态类型","动态参数","随机","随机最小","随机最大","随机长度"});
+    m_replyHeaderTable->setHorizontalHeaderLabels({"名称","类型","字节序/长度","默认值","动态类型","动态参数","随机","随机最小","随机最大","随机长度"});
     for (int i = 0; i < 10; ++i)
         m_replyHeaderTable->horizontalHeader()->setSectionResizeMode(i, QHeaderView::Stretch);
     m_replyHeaderTable->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -179,7 +179,7 @@ void ProtocolEditDialog::setupUi()
     auto rplDataContent = new QWidget;
     auto rplDataLayout = new QVBoxLayout(rplDataContent);
     m_replyDataTable = new QTableWidget(0, 10);
-    m_replyDataTable->setHorizontalHeaderLabels({"名称","类型","字节序","默认值","动态类型","动态参数","随机","随机最小","随机最大","随机长度"});
+    m_replyDataTable->setHorizontalHeaderLabels({"名称","类型","字节序/长度","默认值","动态类型","动态参数","随机","随机最小","随机最大","随机长度"});
     for (int i = 0; i < 10; ++i)
         m_replyDataTable->horizontalHeader()->setSectionResizeMode(i, QHeaderView::Stretch);
     m_replyDataTable->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -332,15 +332,6 @@ void ProtocolEditDialog::populateParamRow(QTableWidget *table, int row, const Pr
     auto *itemName = new QTableWidgetItem(param.name);
     table->setItem(row, 0, itemName);
 
-    // 类型 (1)
-    auto typeCombo = new QComboBox;
-    typeCombo->setFocusPolicy(Qt::StrongFocus);
-    for (int i = 0; i <= (int)ParamType::Hex; ++i)
-        typeCombo->addItem(ProtocolParam::typeToString((ParamType)i));
-    typeCombo->setCurrentIndex((int)param.type);
-    table->setCellWidget(row, 1, typeCombo);
-    connect(typeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &ProtocolEditDialog::onParamChanged);
-
     // 字节序/长度 (2) -- 数值类型显示字节序, Hex/Bytes/String显示长度
     auto setupOrderOrLength = [this, table, row](ParamType t, ByteOrder order, int len) {
         if (isRawByteType(t)) {
@@ -362,7 +353,15 @@ void ProtocolEditDialog::populateParamRow(QTableWidget *table, int row, const Pr
     };
     setupOrderOrLength(param.type, param.byteOrder, param.userLength);
 
-    // 类型变化时自动切换字节序/长度控件
+    // 类型 (1)
+    auto typeCombo = new QComboBox;
+    typeCombo->setFocusPolicy(Qt::StrongFocus);
+    for (int i = 0; i <= (int)ParamType::Hex; ++i)
+        typeCombo->addItem(ProtocolParam::typeToString((ParamType)i));
+    typeCombo->setCurrentIndex((int)param.type);
+    table->setCellWidget(row, 1, typeCombo);
+
+    // 类型变化时切换字节序/长度控件，然后通知参数变化
     connect(typeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), [this, table, row, setupOrderOrLength](int idx) {
         ParamType t = (ParamType)idx;
         ByteOrder currOrder = ByteOrder::BigEndian;
