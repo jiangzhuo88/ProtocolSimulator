@@ -41,7 +41,10 @@ void SimConnection::onReadyRead()
 
 void SimConnection::tryMatch()
 {
-    // 遍历所有有效协议，尝试匹配
+    // 遍历所有有效协议，尝试匹配(多条协议可能同时匹配，都需回复)
+    bool anyMatched = false;
+    int maxMatchedSize = 0;
+
     for (int i = 0; i < m_protocols.size(); ++i) {
         const ProtocolConfig &proto = m_protocols[i];
         if (proto.isActivePush) continue; // 主动上报协议不参与匹配
@@ -107,13 +110,18 @@ void SimConnection::tryMatch()
                 startPeriodicReply(i, reply.customIntervalMs);
             }
 
-            // 消费已匹配的数据
-            m_rxBuffer.remove(0, totalSize);
-            // 继续尝试匹配剩余数据
-            if (!m_rxBuffer.isEmpty())
-                tryMatch();
-            return;
+            anyMatched = true;
+            if (totalSize > maxMatchedSize)
+                maxMatchedSize = totalSize;
         }
+    }
+
+    if (anyMatched) {
+        // 消费已匹配的数据(取最大匹配长度)
+        m_rxBuffer.remove(0, maxMatchedSize);
+        // 继续尝试匹配剩余数据
+        if (!m_rxBuffer.isEmpty())
+            tryMatch();
     }
 }
 
