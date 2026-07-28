@@ -12,10 +12,11 @@ int ProtocolParam::byteSize() const
     case ParamType::UInt16: case ParamType::Int16:  return 2;
     case ParamType::UInt32: case ParamType::Int32:  case ParamType::Float32: return 4;
     case ParamType::UInt64: case ParamType::Int64:  case ParamType::Float64: return 8;
-    case ParamType::String:     return defaultValue.toLatin1().size();
-    case ParamType::StringUtf8: return defaultValue.toUtf8().size();
-    case ParamType::Bytes:      return defaultValue.size() / 2; // hex string
+    case ParamType::String:     return userLength > 0 ? userLength : defaultValue.toLatin1().size();
+    case ParamType::StringUtf8: return userLength > 0 ? userLength : defaultValue.toUtf8().size();
+    case ParamType::Bytes:      return userLength > 0 ? userLength : (defaultValue.size() / 2);
     case ParamType::Hex: {
+        if (userLength > 0) return userLength;
         QString s = defaultValue;
         s.remove(' ');
         return s.size() / 2;
@@ -175,15 +176,25 @@ QByteArray ProtocolParam::toBytes(quint64 seq, int dataAreaLen, const QByteArray
         ds << v;
         return data;
     }
-    case ParamType::String:
-        return defaultValue.toLatin1();
-    case ParamType::StringUtf8:
-        return defaultValue.toUtf8();
+    case ParamType::String: {
+        QByteArray data = defaultValue.toLatin1();
+        if (userLength > 0) data.resize(userLength);
+        return data;
+    }
+    case ParamType::StringUtf8: {
+        QByteArray data = defaultValue.toUtf8();
+        if (userLength > 0) data.resize(userLength);
+        return data;
+    }
     case ParamType::Bytes:
     case ParamType::Hex: {
         QString s = defaultValue;
         s.remove(' ').remove('\n').remove('\t');
-        return QByteArray::fromHex(s.toLatin1());
+        if (s.startsWith("0x", Qt::CaseInsensitive))
+            s.remove(0, 2);
+        QByteArray data = QByteArray::fromHex(s.toLatin1());
+        if (userLength > 0) data.resize(userLength);
+        return data;
     }
     }
     return QByteArray();
@@ -428,6 +439,7 @@ QJsonObject ProtocolParam::toJson() const
     o["matchMode"] = matchModeToString(matchMode);
     o["matchValue"] = matchValue;
     o["matchValue2"] = matchValue2;
+    o["userLength"] = userLength;
     o["isRandom"] = isRandom;
     o["randomMin"] = randomMin;
     o["randomMax"] = randomMax;
@@ -447,6 +459,7 @@ void ProtocolParam::fromJson(const QJsonObject &o)
     matchMode = stringToMatchMode(o["matchMode"].toString());
     matchValue = o["matchValue"].toString();
     matchValue2 = o["matchValue2"].toString();
+    userLength = o["userLength"].toInt(0);
     isRandom = o["isRandom"].toBool(false);
     randomMin = o["randomMin"].toString();
     randomMax = o["randomMax"].toString();

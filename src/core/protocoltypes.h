@@ -74,6 +74,8 @@ struct ProtocolParam {
     QString matchValue;        // 匹配值
     QString matchValue2;       // 第二匹配值(范围匹配时的max, 掩码匹配时的expected)
 
+    int userLength;            // 用户显式指定的长度(仅Hex/Bytes/String类型用,0=自动推导)
+
     bool isRandom;             // 是否随机值(用于回复参数)
     QString randomMin;         // 随机最小值
     QString randomMax;         // 随机最大值
@@ -86,6 +88,7 @@ struct ProtocolParam {
         , dynamicParam(0)
         , matchEnabled(false)
         , matchMode(MatchMode::Exact)
+        , userLength(0)
         , isRandom(false)
         , randomLength(8)
     {}

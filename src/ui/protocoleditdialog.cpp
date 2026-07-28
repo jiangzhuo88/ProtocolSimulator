@@ -194,6 +194,12 @@ void ProtocolEditDialog::setupUi()
     rplDataGroup->setContentWidget(rplDataContent);
     replyLayout->addWidget(rplDataGroup);
 
+    auto rplUtilLayout = new QHBoxLayout;
+    auto btnRplSwap = new QPushButton("一键切换所有字段大小端");
+    rplUtilLayout->addWidget(btnRplSwap);
+    rplUtilLayout->addStretch();
+    replyLayout->addLayout(rplUtilLayout);
+
     tabWidget->addTab(replyTab, "回复配置");
 
     connect(btnAddRplHdr, &QPushButton::clicked, this, &ProtocolEditDialog::onAddReplyHeaderParam);
@@ -202,6 +208,7 @@ void ProtocolEditDialog::setupUi()
     connect(btnDelRplData, &QPushButton::clicked, this, &ProtocolEditDialog::onRemoveReplyDataParam);
     connect(m_replyModeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &ProtocolEditDialog::onReplyModeChanged);
     connect(m_replyIntervalSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &ProtocolEditDialog::onParamChanged);
+    connect(btnRplSwap, &QPushButton::clicked, this, &ProtocolEditDialog::onSwapByteOrder);
 
     connect(m_replyHeaderTable, &QTableWidget::customContextMenuRequested, this, &ProtocolEditDialog::onReplyHeaderTableContextMenu);
     connect(m_replyDataTable, &QTableWidget::customContextMenuRequested, this, &ProtocolEditDialog::onReplyDataTableContextMenu);
@@ -313,6 +320,12 @@ void ProtocolEditDialog::loadProtocol()
     updateMatchHighlight(m_dataTable);
 }
 
+static bool isRawByteType(ParamType type)
+{
+    return type == ParamType::Hex || type == ParamType::Bytes ||
+           type == ParamType::String || type == ParamType::StringUtf8;
+}
+
 void ProtocolEditDialog::populateParamRow(QTableWidget *table, int row, const ProtocolParam &param, bool isReplyTable)
 {
     // 名称 (0)
@@ -328,14 +341,39 @@ void ProtocolEditDialog::populateParamRow(QTableWidget *table, int row, const Pr
     table->setCellWidget(row, 1, typeCombo);
     connect(typeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &ProtocolEditDialog::onParamChanged);
 
-    // 字节序 (2)
-    auto orderCombo = new QComboBox;
-    orderCombo->setFocusPolicy(Qt::StrongFocus);
-    orderCombo->addItem("BigEndian");
-    orderCombo->addItem("LittleEndian");
-    orderCombo->setCurrentIndex((int)param.byteOrder);
-    table->setCellWidget(row, 2, orderCombo);
-    connect(orderCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &ProtocolEditDialog::onParamChanged);
+    // 字节序/长度 (2) -- 数值类型显示字节序, Hex/Bytes/String显示长度
+    auto setupOrderOrLength = [this, table, row](ParamType t, ByteOrder order, int len) {
+        if (isRawByteType(t)) {
+            auto lenSpin = new QSpinBox;
+            lenSpin->setRange(0, 9999);
+            lenSpin->setValue(len);
+            lenSpin->setToolTip("0=自动(根据默认值推导)");
+            table->setCellWidget(row, 2, lenSpin);
+            connect(lenSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &ProtocolEditDialog::onParamChanged);
+        } else {
+            auto orderCombo = new QComboBox;
+            orderCombo->setFocusPolicy(Qt::StrongFocus);
+            orderCombo->addItem("BigEndian");
+            orderCombo->addItem("LittleEndian");
+            orderCombo->setCurrentIndex((int)order);
+            table->setCellWidget(row, 2, orderCombo);
+            connect(orderCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &ProtocolEditDialog::onParamChanged);
+        }
+    };
+    setupOrderOrLength(param.type, param.byteOrder, param.userLength);
+
+    // 类型变化时自动切换字节序/长度控件
+    connect(typeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), [this, table, row, setupOrderOrLength](int idx) {
+        ParamType t = (ParamType)idx;
+        ByteOrder currOrder = ByteOrder::BigEndian;
+        int currLen = 0;
+        if (auto oldCombo = qobject_cast<QComboBox*>(table->cellWidget(row, 2)))
+            currOrder = (ByteOrder)oldCombo->currentIndex();
+        if (auto oldSpin = qobject_cast<QSpinBox*>(table->cellWidget(row, 2)))
+            currLen = oldSpin->value();
+        setupOrderOrLength(t, currOrder, currLen);
+        onParamChanged();
+    });
 
     // 默认值 (3)
     auto *itemDefault = new QTableWidgetItem(param.defaultValue);
@@ -416,8 +454,13 @@ ProtocolParam ProtocolEditDialog::readParamRow(QTableWidget *table, int row, boo
     auto typeCombo = qobject_cast<QComboBox*>(table->cellWidget(row, 1));
     if (typeCombo) param.type = (ParamType)typeCombo->currentIndex();
 
-    auto orderCombo = qobject_cast<QComboBox*>(table->cellWidget(row, 2));
-    if (orderCombo) param.byteOrder = (ByteOrder)orderCombo->currentIndex();
+    if (isRawByteType(param.type)) {
+        auto lenSpin = qobject_cast<QSpinBox*>(table->cellWidget(row, 2));
+        if (lenSpin) param.userLength = lenSpin->value();
+    } else {
+        auto orderCombo = qobject_cast<QComboBox*>(table->cellWidget(row, 2));
+        if (orderCombo) param.byteOrder = (ByteOrder)orderCombo->currentIndex();
+    }
 
     param.defaultValue = table->item(row, 3) ? table->item(row, 3)->text() : "";
 
