@@ -394,6 +394,22 @@ void ProtocolEditDialog::populateParamRow(QTableWidget *table, int row, const Pr
     table->setCellWidget(row, 5, dynSpin);
     connect(dynSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &ProtocolEditDialog::onParamChanged);
 
+    // 根据动态类型更新动态参数提示
+    auto updateDynToolTip = [dynSpin](int dynIdx) {
+        DynamicType dt = (DynamicType)dynIdx;
+        switch (dt) {
+        case DynamicType::None:     dynSpin->setToolTip(""); break;
+        case DynamicType::Timestamp: dynSpin->setToolTip("0=秒 1=毫秒"); break;
+        case DynamicType::Length:   dynSpin->setToolTip("0=数据区长度 1=总帧长度(包头+数据区)"); break;
+        case DynamicType::Checksum: dynSpin->setToolTip("校验和计算起始偏移"); break;
+        case DynamicType::Sequence: dynSpin->setToolTip("保留"); break;
+        }
+    };
+    updateDynToolTip((int)param.dynamicType);
+    connect(dynCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), [updateDynToolTip](int idx) {
+        updateDynToolTip(idx);
+    });
+
     if (isReplyTable) {
         // 随机 (6)
         auto randCheck = new QCheckBox;

@@ -638,10 +638,19 @@ QByteArray ProtocolConfig::buildFrame(quint64 seq) const
     for (const auto &p : dataParams)
         dataArea += p.toBytes(seq, 0);
 
+    // 计算帧头总长度
+    int headerSize = 0;
+    for (const auto &p : headerParams)
+        headerSize += p.byteSize();
+
     // 构建帧头(需要数据区长度)
     QByteArray header;
-    for (const auto &p : headerParams)
-        header += p.toBytes(seq, dataArea.size());
+    for (const auto &p : headerParams) {
+        int len = dataArea.size();
+        if (p.dynamicType == DynamicType::Length && p.dynamicParam == 1)
+            len = dataArea.size() + headerSize;
+        header += p.toBytes(seq, len);
+    }
 
     // 重新构建含有校验和的字段
     QByteArray frame = header + dataArea;
@@ -673,13 +682,22 @@ QByteArray ProtocolConfig::buildReplyFrame(quint64 seq) const
             dataArea += p.toBytes(seq, 0);
     }
 
+    // 计算回复帧头总长度
+    int headerSize = 0;
+    for (const auto &p : replyConfig.headerParams)
+        headerSize += p.byteSize();
+
     // 构建回复帧头
     QByteArray header;
     for (const auto &p : replyConfig.headerParams) {
         if (p.isRandom)
             header += p.toRandomBytes();
-        else
-            header += p.toBytes(seq, dataArea.size());
+        else {
+            int len = dataArea.size();
+            if (p.dynamicType == DynamicType::Length && p.dynamicParam == 1)
+                len = dataArea.size() + headerSize;
+            header += p.toBytes(seq, len);
+        }
     }
 
     QByteArray frame = header + dataArea;
