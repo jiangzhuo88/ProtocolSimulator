@@ -48,6 +48,12 @@ void ProtocolEditDialog::setupUi()
     pushLayout->addWidget(m_activePushCheck);
     pushLayout->addWidget(new QLabel("周期(ms):"));
     pushLayout->addWidget(m_pushIntervalSpin);
+    pushLayout->addWidget(new QLabel("  固定帧长度:"));
+    m_fixedFrameLenSpin = new QSpinBox;
+    m_fixedFrameLenSpin->setRange(0, 999999);
+    m_fixedFrameLenSpin->setValue(0);
+    m_fixedFrameLenSpin->setToolTip("0=根据参数自动计算帧长度\n>0=手动指定整帧字节数(数据区未配齐时使用)");
+    pushLayout->addWidget(m_fixedFrameLenSpin);
     pushLayout->addStretch();
     mainLayout->addLayout(pushLayout);
 
@@ -56,6 +62,7 @@ void ProtocolEditDialog::setupUi()
         onParamChanged();
     });
     connect(m_pushIntervalSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &ProtocolEditDialog::onParamChanged);
+    connect(m_fixedFrameLenSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &ProtocolEditDialog::onParamChanged);
     connect(m_nameEdit, &QLineEdit::textChanged, this, &ProtocolEditDialog::onParamChanged);
     connect(m_descEdit, &QLineEdit::textChanged, this, &ProtocolEditDialog::onParamChanged);
 
@@ -275,6 +282,7 @@ void ProtocolEditDialog::loadProtocol()
     m_activePushCheck->setChecked(m_proto.isActivePush);
     m_pushIntervalSpin->setValue(m_proto.pushIntervalMs);
     m_pushIntervalSpin->setEnabled(m_proto.isActivePush);
+    m_fixedFrameLenSpin->setValue(m_proto.fixedFrameLength);
 
     // 帧头参数
     m_headerTable->setRowCount(0);
@@ -534,6 +542,7 @@ void ProtocolEditDialog::saveProtocol()
     m_proto.description = m_descEdit->text().trimmed();
     m_proto.isActivePush = m_activePushCheck->isChecked();
     m_proto.pushIntervalMs = m_pushIntervalSpin->value();
+    m_proto.fixedFrameLength = m_fixedFrameLenSpin->value();
 
     // 保存帧头参数
     m_proto.headerParams.clear();
@@ -1018,6 +1027,8 @@ void ProtocolEditDialog::updatePreview()
         offset += sz;
     }
     detail += QString("<br><b>完整帧 (%1字节):</b> %2").arg(frame.size()).arg(hex);
+    if (m_proto.fixedFrameLength > 0)
+        detail += QString("<br><font color='orange'>固定帧长度: %1字节 (匹配时按此长度消费buffer)</font>").arg(m_proto.fixedFrameLength);
     detail += "</pre>";
     m_previewLabel->setText(detail);
 

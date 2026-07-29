@@ -61,6 +61,8 @@ void SimConnection::tryMatch()
             dataSize += p.byteSize();
 
         int totalSize = headerSize + dataSize;
+        if (proto.fixedFrameLength > 0)
+            totalSize = proto.fixedFrameLength;
         if (m_rxBuffer.size() < totalSize) continue;
 
         // 提取每个字段的字节进行匹配

@@ -72,6 +72,7 @@ private:
     QLineEdit *m_descEdit;
     QCheckBox *m_activePushCheck;
     QSpinBox *m_pushIntervalSpin;
+    QSpinBox *m_fixedFrameLenSpin;
 
     // 接收协议Tab
     QTableWidget *m_headerTable;

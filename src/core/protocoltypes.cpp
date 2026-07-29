@@ -755,6 +755,7 @@ QJsonObject ProtocolConfig::toJson() const
     o["replyConfig"] = replyConfig.toJson();
     o["isActivePush"] = isActivePush;
     o["pushIntervalMs"] = pushIntervalMs;
+    o["fixedFrameLength"] = fixedFrameLength;
     return o;
 }
 
@@ -771,6 +772,7 @@ void ProtocolConfig::fromJson(const QJsonObject &o)
     replyConfig.fromJson(o["replyConfig"].toObject());
     isActivePush = o["isActivePush"].toBool(false);
     pushIntervalMs = o["pushIntervalMs"].toInt(1000);
+    fixedFrameLength = o["fixedFrameLength"].toInt(0);
 }
 
 // ==================== SceneConfig ====================

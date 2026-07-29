@@ -145,8 +145,9 @@ struct ProtocolConfig {
     ReplyConfig replyConfig;                // 回复配置
     bool isActivePush;                      // 是否主动上报(心跳/状态)
     int pushIntervalMs;                     // 主动上报周期(ms)
+    int fixedFrameLength;                   // 固定帧总长度(0=根据参数自动计算, >0=手动指定)
 
-    ProtocolConfig() : isActivePush(false), pushIntervalMs(1000) {}
+    ProtocolConfig() : isActivePush(false), pushIntervalMs(1000), fixedFrameLength(0) {}
 
     // 是否有效(主动上报始终有效, 或至少有一个参数启用了匹配)
     bool isValid() const;
