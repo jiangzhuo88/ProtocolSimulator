@@ -7,22 +7,25 @@
 
 int ProtocolParam::byteSize() const
 {
+    int singleSize = 0;
     switch (type) {
-    case ParamType::UInt8:  case ParamType::Int8:   return 1;
-    case ParamType::UInt16: case ParamType::Int16:  return 2;
-    case ParamType::UInt32: case ParamType::Int32:  case ParamType::Float32: return 4;
-    case ParamType::UInt64: case ParamType::Int64:  case ParamType::Float64: return 8;
-    case ParamType::String:     return userLength > 0 ? userLength : defaultValue.toLatin1().size();
-    case ParamType::StringUtf8: return userLength > 0 ? userLength : defaultValue.toUtf8().size();
-    case ParamType::Bytes:      return userLength > 0 ? userLength : (defaultValue.size() / 2);
+    case ParamType::UInt8:  case ParamType::Int8:   singleSize = 1; break;
+    case ParamType::UInt16: case ParamType::Int16:  singleSize = 2; break;
+    case ParamType::UInt32: case ParamType::Int32:  case ParamType::Float32: singleSize = 4; break;
+    case ParamType::UInt64: case ParamType::Int64:  case ParamType::Float64: singleSize = 8; break;
+    case ParamType::String:     singleSize = userLength > 0 ? userLength : defaultValue.toLatin1().size(); break;
+    case ParamType::StringUtf8: singleSize = userLength > 0 ? userLength : defaultValue.toUtf8().size(); break;
+    case ParamType::Bytes:      singleSize = userLength > 0 ? userLength : (defaultValue.size() / 2); break;
     case ParamType::Hex: {
-        if (userLength > 0) return userLength;
+        if (userLength > 0) { singleSize = userLength; break; }
         QString s = defaultValue;
         s.remove(' ');
-        return s.size() / 2;
+        singleSize = s.size() / 2;
+        break;
     }
     }
-    return 0;
+    // 数组: 单元素大小 × 元素个数
+    return singleSize * (arrayCount > 0 ? arrayCount : 1);
 }
 
 QByteArray ProtocolParam::toBytes(quint64 seq, int dataAreaLen, const QByteArray &fullFrame) const
@@ -92,99 +95,94 @@ QByteArray ProtocolParam::toBytes(quint64 seq, int dataAreaLen, const QByteArray
         return data;
     }
 
-    // 非动态，使用默认值
+    // 非动态，使用默认值(生成单个元素的值)
+    QByteArray singleData;
     switch (type) {
     case ParamType::UInt8: {
         bool ok;
         quint8 v = defaultValue.toUInt(&ok, 0);
-        return QByteArray(1, (char)v);
+        singleData = QByteArray(1, (char)v);
+        break;
     }
     case ParamType::Int8: {
         bool ok;
         qint8 v = defaultValue.toInt(&ok, 0);
-        return QByteArray(1, (char)v);
+        singleData = QByteArray(1, (char)v);
+        break;
     }
     case ParamType::UInt16: {
         bool ok;
         quint16 v = defaultValue.toUInt(&ok, 0);
-        QByteArray data;
-        QDataStream ds(&data, QIODevice::WriteOnly);
+        QDataStream ds(&singleData, QIODevice::WriteOnly);
         ds.setByteOrder(byteOrder == ByteOrder::BigEndian ? QDataStream::BigEndian : QDataStream::LittleEndian);
         ds << v;
-        return data;
+        break;
     }
     case ParamType::Int16: {
         bool ok;
         qint16 v = defaultValue.toInt(&ok, 0);
-        QByteArray data;
-        QDataStream ds(&data, QIODevice::WriteOnly);
+        QDataStream ds(&singleData, QIODevice::WriteOnly);
         ds.setByteOrder(byteOrder == ByteOrder::BigEndian ? QDataStream::BigEndian : QDataStream::LittleEndian);
         ds << v;
-        return data;
+        break;
     }
     case ParamType::UInt32: {
         bool ok;
         quint32 v = defaultValue.toUInt(&ok, 0);
-        QByteArray data;
-        QDataStream ds(&data, QIODevice::WriteOnly);
+        QDataStream ds(&singleData, QIODevice::WriteOnly);
         ds.setByteOrder(byteOrder == ByteOrder::BigEndian ? QDataStream::BigEndian : QDataStream::LittleEndian);
         ds << v;
-        return data;
+        break;
     }
     case ParamType::Int32: {
         bool ok;
         qint32 v = defaultValue.toInt(&ok, 0);
-        QByteArray data;
-        QDataStream ds(&data, QIODevice::WriteOnly);
+        QDataStream ds(&singleData, QIODevice::WriteOnly);
         ds.setByteOrder(byteOrder == ByteOrder::BigEndian ? QDataStream::BigEndian : QDataStream::LittleEndian);
         ds << v;
-        return data;
+        break;
     }
     case ParamType::UInt64: {
         bool ok;
         quint64 v = defaultValue.toULongLong(&ok, 0);
-        QByteArray data;
-        QDataStream ds(&data, QIODevice::WriteOnly);
+        QDataStream ds(&singleData, QIODevice::WriteOnly);
         ds.setByteOrder(byteOrder == ByteOrder::BigEndian ? QDataStream::BigEndian : QDataStream::LittleEndian);
         ds << v;
-        return data;
+        break;
     }
     case ParamType::Int64: {
         bool ok;
         qint64 v = defaultValue.toLongLong(&ok, 0);
-        QByteArray data;
-        QDataStream ds(&data, QIODevice::WriteOnly);
+        QDataStream ds(&singleData, QIODevice::WriteOnly);
         ds.setByteOrder(byteOrder == ByteOrder::BigEndian ? QDataStream::BigEndian : QDataStream::LittleEndian);
         ds << v;
-        return data;
+        break;
     }
     case ParamType::Float32: {
         float v = defaultValue.toFloat();
-        QByteArray data;
-        QDataStream ds(&data, QIODevice::WriteOnly);
+        QDataStream ds(&singleData, QIODevice::WriteOnly);
         ds.setFloatingPointPrecision(QDataStream::SinglePrecision);
         ds.setByteOrder(byteOrder == ByteOrder::BigEndian ? QDataStream::BigEndian : QDataStream::LittleEndian);
         ds << v;
-        return data;
+        break;
     }
     case ParamType::Float64: {
         double v = defaultValue.toDouble();
-        QByteArray data;
-        QDataStream ds(&data, QIODevice::WriteOnly);
+        QDataStream ds(&singleData, QIODevice::WriteOnly);
         ds.setFloatingPointPrecision(QDataStream::DoublePrecision);
         ds.setByteOrder(byteOrder == ByteOrder::BigEndian ? QDataStream::BigEndian : QDataStream::LittleEndian);
         ds << v;
-        return data;
+        break;
     }
     case ParamType::String: {
-        QByteArray data = defaultValue.toLatin1();
-        if (userLength > 0) data.resize(userLength);
-        return data;
+        singleData = defaultValue.toLatin1();
+        if (userLength > 0) singleData.resize(userLength);
+        break;
     }
     case ParamType::StringUtf8: {
-        QByteArray data = defaultValue.toUtf8();
-        if (userLength > 0) data.resize(userLength);
-        return data;
+        singleData = defaultValue.toUtf8();
+        if (userLength > 0) singleData.resize(userLength);
+        break;
     }
     case ParamType::Bytes:
     case ParamType::Hex: {
@@ -192,17 +190,26 @@ QByteArray ProtocolParam::toBytes(quint64 seq, int dataAreaLen, const QByteArray
         s.remove(' ').remove('\n').remove('\t');
         if (s.startsWith("0x", Qt::CaseInsensitive))
             s.remove(0, 2);
-        QByteArray data = QByteArray::fromHex(s.toLatin1());
-        if (userLength > 0) data.resize(userLength);
-        return data;
+        singleData = QByteArray::fromHex(s.toLatin1());
+        if (userLength > 0) singleData.resize(userLength);
+        break;
     }
     }
-    return QByteArray();
+
+    // 数组: 重复单元素值
+    if (arrayCount <= 1) return singleData;
+    QByteArray result;
+    result.reserve(singleData.size() * arrayCount);
+    for (int i = 0; i < arrayCount; ++i)
+        result += singleData;
+    return result;
 }
 
 QByteArray ProtocolParam::toRandomBytes() const
 {
     if (!isRandom) return toBytes();
+
+    int count = arrayCount > 0 ? arrayCount : 1;
 
     if (type == ParamType::Bytes || type == ParamType::Hex) {
         int len = randomLength;
@@ -213,46 +220,57 @@ QByteArray ProtocolParam::toRandomBytes() const
         return data;
     }
 
-    if (type == ParamType::Float32 || type == ParamType::Float64) {
-        double minVal = randomMin.isEmpty() ? 0.0 : randomMin.toDouble();
-        double maxVal = randomMax.isEmpty() ? 1.0 : randomMax.toDouble();
-        double r = QRandomGenerator::global()->generateDouble();
-        double val = minVal + r * (maxVal - minVal);
+    // 生成单个随机元素的字节
+    auto genSingleRandom = [this, count]() -> QByteArray {
+        if (type == ParamType::Float32 || type == ParamType::Float64) {
+            double minVal = randomMin.isEmpty() ? 0.0 : randomMin.toDouble();
+            double maxVal = randomMax.isEmpty() ? 1.0 : randomMax.toDouble();
+            double r = QRandomGenerator::global()->generateDouble();
+            double val = minVal + r * (maxVal - minVal);
+
+            QByteArray data;
+            QDataStream ds(&data, QIODevice::WriteOnly);
+            ds.setByteOrder(byteOrder == ByteOrder::BigEndian ? QDataStream::BigEndian : QDataStream::LittleEndian);
+            if (type == ParamType::Float32) {
+                ds.setFloatingPointPrecision(QDataStream::SinglePrecision);
+                ds << (float)val;
+            } else {
+                ds.setFloatingPointPrecision(QDataStream::DoublePrecision);
+                ds << val;
+            }
+            return data;
+        }
+
+        // 整数类型随机
+        bool ok;
+        qint64 minVal = randomMin.toLongLong(&ok, 0);
+        if (!ok) minVal = 0;
+        qint64 maxVal = randomMax.toLongLong(&ok, 0);
+        if (!ok) maxVal = 65535;
+        if (maxVal < minVal) std::swap(minVal, maxVal);
+
+        quint64 range = (quint64)(maxVal - minVal);
+        quint64 val = (quint64)minVal + (range > 0 ? QRandomGenerator::global()->bounded((quint32)(range + 1)) : 0);
 
         QByteArray data;
         QDataStream ds(&data, QIODevice::WriteOnly);
         ds.setByteOrder(byteOrder == ByteOrder::BigEndian ? QDataStream::BigEndian : QDataStream::LittleEndian);
-        if (type == ParamType::Float32) {
-            ds.setFloatingPointPrecision(QDataStream::SinglePrecision);
-            ds << (float)val;
-        } else {
-            ds.setFloatingPointPrecision(QDataStream::DoublePrecision);
-            ds << val;
-        }
+
+        int singleSz = byteSize() / count;
+        if (singleSz <= 1) ds << (quint8)val;
+        else if (singleSz <= 2) ds << (quint16)val;
+        else if (singleSz <= 4) ds << (quint32)val;
+        else ds << (quint64)val;
         return data;
-    }
+    };
 
-    // 整数类型随机
-    bool ok;
-    qint64 minVal = randomMin.toLongLong(&ok, 0);
-    if (!ok) minVal = 0;
-    qint64 maxVal = randomMax.toLongLong(&ok, 0);
-    if (!ok) maxVal = 65535;
-    if (maxVal < minVal) std::swap(minVal, maxVal);
-
-    quint64 range = (quint64)(maxVal - minVal);
-    quint64 val = (quint64)minVal + (range > 0 ? QRandomGenerator::global()->bounded((quint32)(range + 1)) : 0);
-
-    QByteArray data;
-    QDataStream ds(&data, QIODevice::WriteOnly);
-    ds.setByteOrder(byteOrder == ByteOrder::BigEndian ? QDataStream::BigEndian : QDataStream::LittleEndian);
-
-    int sz = byteSize();
-    if (sz <= 1) ds << (quint8)val;
-    else if (sz <= 2) ds << (quint16)val;
-    else if (sz <= 4) ds << (quint32)val;
-    else ds << (quint64)val;
-    return data;
+    QByteArray single = genSingleRandom();
+    if (count <= 1) return single;
+    QByteArray result;
+    result.reserve(single.size() * count);
+    for (int i = 0; i < count; ++i)
+        result += genSingleRandom();
+    return result;
 }
 
 QString ProtocolParam::fromBytes(const QByteArray &data, ParamType type, ByteOrder order)
@@ -440,6 +458,7 @@ QJsonObject ProtocolParam::toJson() const
     o["matchValue"] = matchValue;
     o["matchValue2"] = matchValue2;
     o["userLength"] = userLength;
+    o["arrayCount"] = arrayCount;
     o["isRandom"] = isRandom;
     o["randomMin"] = randomMin;
     o["randomMax"] = randomMax;
@@ -460,6 +479,7 @@ void ProtocolParam::fromJson(const QJsonObject &o)
     matchValue = o["matchValue"].toString();
     matchValue2 = o["matchValue2"].toString();
     userLength = o["userLength"].toInt(0);
+    arrayCount = o["arrayCount"].toInt(1);
     isRandom = o["isRandom"].toBool(false);
     randomMin = o["randomMin"].toString();
     randomMax = o["randomMax"].toString();
