@@ -757,6 +757,9 @@ QJsonObject ProtocolConfig::toJson() const
     o["pushIntervalMs"] = pushIntervalMs;
     o["fixedFrameLength"] = fixedFrameLength;
     o["stopAllPeriodicOnMatch"] = stopAllPeriodicOnMatch;
+    QJsonArray stopArr;
+    for (const auto &n : stopPeriodicProtocolNames) stopArr.append(n);
+    o["stopPeriodicProtocolNames"] = stopArr;
     return o;
 }
 
@@ -775,6 +778,9 @@ void ProtocolConfig::fromJson(const QJsonObject &o)
     pushIntervalMs = o["pushIntervalMs"].toInt(1000);
     fixedFrameLength = o["fixedFrameLength"].toInt(0);
     stopAllPeriodicOnMatch = o["stopAllPeriodicOnMatch"].toBool(false);
+    stopPeriodicProtocolNames.clear();
+    QJsonArray stopArr = o["stopPeriodicProtocolNames"].toArray();
+    for (const auto &v : stopArr) stopPeriodicProtocolNames.append(v.toString());
 }
 
 // ==================== SceneConfig ====================

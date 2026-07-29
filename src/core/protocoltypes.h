@@ -147,6 +147,7 @@ struct ProtocolConfig {
     int pushIntervalMs;                     // 主动上报周期(ms)
     int fixedFrameLength;                   // 固定帧总长度(0=根据参数自动计算, >0=手动指定)
     bool stopAllPeriodicOnMatch;            // 匹配成功时停止所有正在运行的周期回复
+    QStringList stopPeriodicProtocolNames;  // 匹配成功时要停止的周期回复协议名称列表
 
     ProtocolConfig() : isActivePush(false), pushIntervalMs(1000), fixedFrameLength(0), stopAllPeriodicOnMatch(false) {}
 

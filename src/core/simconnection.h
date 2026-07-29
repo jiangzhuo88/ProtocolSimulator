@@ -41,6 +41,7 @@ private:
     void tryMatch();
     void startPeriodicReply(int protoIndex, int intervalMs);
     void stopAllPeriodicReplies();
+    void stopPeriodicReplyByName(const QString &name);
 };
 
 #endif // SIMCONNECTION_H

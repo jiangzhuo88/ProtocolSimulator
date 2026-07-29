@@ -12,10 +12,11 @@
 #include <QMimeData>
 #include <QScrollArea>
 #include <QApplication>
+#include <QListWidget>
 #include "collapsiblegroupbox.h"
 
-ProtocolEditDialog::ProtocolEditDialog(ProtocolConfig &proto, QWidget *parent)
-    : QDialog(parent), m_proto(proto), m_loading(false)
+ProtocolEditDialog::ProtocolEditDialog(ProtocolConfig &proto, QVector<ProtocolConfig> *allProtocols, QWidget *parent)
+    : QDialog(parent), m_proto(proto), m_allProtocols(allProtocols), m_loading(false)
 {
     setupUi();
     loadProtocol();
@@ -54,9 +55,6 @@ void ProtocolEditDialog::setupUi()
     m_fixedFrameLenSpin->setValue(0);
     m_fixedFrameLenSpin->setToolTip("0=根据参数自动计算帧长度\n>0=手动指定整帧字节数(数据区未配齐时使用)");
     pushLayout->addWidget(m_fixedFrameLenSpin);
-    m_stopAllCheck = new QCheckBox("匹配时停止所有周期回复");
-    m_stopAllCheck->setToolTip("勾选后，该协议匹配成功时会停止所有正在运行的周期回复(用于停止指令)");
-    pushLayout->addWidget(m_stopAllCheck);
     pushLayout->addStretch();
     mainLayout->addLayout(pushLayout);
 
@@ -66,7 +64,6 @@ void ProtocolEditDialog::setupUi()
     });
     connect(m_pushIntervalSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &ProtocolEditDialog::onParamChanged);
     connect(m_fixedFrameLenSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &ProtocolEditDialog::onParamChanged);
-    connect(m_stopAllCheck, &QCheckBox::toggled, this, &ProtocolEditDialog::onParamChanged);
     connect(m_nameEdit, &QLineEdit::textChanged, this, &ProtocolEditDialog::onParamChanged);
     connect(m_descEdit, &QLineEdit::textChanged, this, &ProtocolEditDialog::onParamChanged);
 
@@ -134,6 +131,43 @@ void ProtocolEditDialog::setupUi()
     recvLayout->addLayout(utilBtnLayout);
 
     tabWidget->addTab(recvTab, "接收协议配置");
+
+    // ====== Tab2: 操作配置 ======
+    auto actionTab = new QWidget;
+    auto actionLayout = new QVBoxLayout(actionTab);
+
+    m_stopAllCheck = new QCheckBox("匹配成功时停止所有周期回复");
+    m_stopAllCheck->setToolTip("勾选后，该协议匹配成功时会停止所有正在运行的周期回复");
+    actionLayout->addWidget(m_stopAllCheck);
+
+    actionLayout->addWidget(new QLabel("选择要停止的周期回复协议:"));
+    m_stopList = new QListWidget;
+    m_stopList->setSelectionMode(QAbstractItemView::NoSelection);
+    m_stopList->setAlternatingRowColors(true);
+    actionLayout->addWidget(m_stopList);
+
+    auto actionBtnLayout = new QHBoxLayout;
+    auto btnSelectAll = new QPushButton("全选");
+    auto btnDeselectAll = new QPushButton("全不选");
+    actionBtnLayout->addWidget(btnSelectAll);
+    actionBtnLayout->addWidget(btnDeselectAll);
+    actionBtnLayout->addStretch();
+    actionLayout->addLayout(actionBtnLayout);
+
+    tabWidget->addTab(actionTab, "操作配置");
+
+    connect(btnSelectAll, &QPushButton::clicked, [this]() {
+        for (int i = 0; i < m_stopList->count(); ++i)
+            m_stopList->item(i)->setCheckState(Qt::Checked);
+        onParamChanged();
+    });
+    connect(btnDeselectAll, &QPushButton::clicked, [this]() {
+        for (int i = 0; i < m_stopList->count(); ++i)
+            m_stopList->item(i)->setCheckState(Qt::Unchecked);
+        onParamChanged();
+    });
+    connect(m_stopAllCheck, &QCheckBox::toggled, this, &ProtocolEditDialog::onParamChanged);
+    connect(m_stopList, &QListWidget::itemChanged, this, [this](QListWidgetItem *) { onParamChanged(); });
 
     connect(btnAddHdr, &QPushButton::clicked, this, &ProtocolEditDialog::onAddHeaderParam);
     connect(btnDelHdr, &QPushButton::clicked, this, &ProtocolEditDialog::onRemoveHeaderParam);
@@ -288,6 +322,23 @@ void ProtocolEditDialog::loadProtocol()
     m_pushIntervalSpin->setEnabled(m_proto.isActivePush);
     m_fixedFrameLenSpin->setValue(m_proto.fixedFrameLength);
     m_stopAllCheck->setChecked(m_proto.stopAllPeriodicOnMatch);
+
+    // 填充操作配置列表(场景中其他有周期回复的协议)
+    m_stopList->clear();
+    if (m_allProtocols) {
+        for (const auto &proto : *m_allProtocols) {
+            if (proto.name == m_proto.name) continue; // 跳过自身
+            if (proto.replyConfig.mode == ReplyMode::Periodic1s ||
+                proto.replyConfig.mode == ReplyMode::Periodic5s ||
+                proto.replyConfig.mode == ReplyMode::PeriodicCustom) {
+                auto item = new QListWidgetItem(proto.name);
+                item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
+                item->setCheckState(m_proto.stopPeriodicProtocolNames.contains(proto.name)
+                                    ? Qt::Checked : Qt::Unchecked);
+                m_stopList->addItem(item);
+            }
+        }
+    }
 
     // 帧头参数
     m_headerTable->setRowCount(0);
@@ -549,6 +600,14 @@ void ProtocolEditDialog::saveProtocol()
     m_proto.pushIntervalMs = m_pushIntervalSpin->value();
     m_proto.fixedFrameLength = m_fixedFrameLenSpin->value();
     m_proto.stopAllPeriodicOnMatch = m_stopAllCheck->isChecked();
+
+    // 保存操作配置中选中的协议
+    m_proto.stopPeriodicProtocolNames.clear();
+    for (int i = 0; i < m_stopList->count(); ++i) {
+        auto item = m_stopList->item(i);
+        if (item->checkState() == Qt::Checked)
+            m_proto.stopPeriodicProtocolNames.append(item->text());
+    }
 
     // 保存帧头参数
     m_proto.headerParams.clear();

@@ -201,8 +201,9 @@ void MainWindow::onAddProtocol()
     }
     ProtocolConfig proto;
     proto.name = "新协议";
+    auto &protocols = m_config.scenes()[m_currentSceneIndex].protocols;
 
-    ProtocolEditDialog dlg(proto, this);
+    ProtocolEditDialog dlg(proto, &protocols, this);
     if (dlg.exec() == QDialog::Accepted) {
         proto = dlg.getProtocol();
         m_config.scenes()[m_currentSceneIndex].protocols.append(proto);
@@ -221,8 +222,9 @@ void MainWindow::onEditProtocol()
         return;
     }
     ProtocolConfig proto = m_config.scenes()[m_currentSceneIndex].protocols[row];
+    auto &protocols = m_config.scenes()[m_currentSceneIndex].protocols;
 
-    ProtocolEditDialog dlg(proto, this);
+    ProtocolEditDialog dlg(proto, &protocols, this);
     if (dlg.exec() == QDialog::Accepted) {
         proto = dlg.getProtocol();
         m_config.scenes()[m_currentSceneIndex].protocols[row] = proto;
@@ -237,8 +239,9 @@ void MainWindow::onProtocolDoubleClicked(int row, int)
 {
     if (m_currentSceneIndex < 0 || row < 0) return;
     ProtocolConfig proto = m_config.scenes()[m_currentSceneIndex].protocols[row];
+    auto &protocols = m_config.scenes()[m_currentSceneIndex].protocols;
 
-    ProtocolEditDialog dlg(proto, this);
+    ProtocolEditDialog dlg(proto, &protocols, this);
     if (dlg.exec() == QDialog::Accepted) {
         proto = dlg.getProtocol();
         m_config.scenes()[m_currentSceneIndex].protocols[row] = proto;

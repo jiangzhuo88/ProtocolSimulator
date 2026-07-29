@@ -10,6 +10,7 @@
 #include <QPushButton>
 #include <QLabel>
 #include <QTabWidget>
+#include <QListWidget>
 #include "collapsiblegroupbox.h"
 #include "../core/protocoltypes.h"
 
@@ -17,7 +18,7 @@ class ProtocolEditDialog : public QDialog
 {
     Q_OBJECT
 public:
-    explicit ProtocolEditDialog(ProtocolConfig &proto, QWidget *parent = nullptr);
+    explicit ProtocolEditDialog(ProtocolConfig &proto, QVector<ProtocolConfig> *allProtocols, QWidget *parent = nullptr);
     ProtocolConfig getProtocol() const;
 
 protected:
@@ -66,6 +67,7 @@ private:
     static QVector<ProtocolParam> paramsFromClipboardData(const QByteArray &data, bool &outIsReplyTable);
 
     ProtocolConfig &m_proto;
+    QVector<ProtocolConfig> *m_allProtocols;
 
     // 基本信息控件
     QLineEdit *m_nameEdit;
@@ -73,7 +75,10 @@ private:
     QCheckBox *m_activePushCheck;
     QSpinBox *m_pushIntervalSpin;
     QSpinBox *m_fixedFrameLenSpin;
+
+    // 操作配置Tab
     QCheckBox *m_stopAllCheck;
+    QListWidget *m_stopList;
 
     // 接收协议Tab
     QTableWidget *m_headerTable;

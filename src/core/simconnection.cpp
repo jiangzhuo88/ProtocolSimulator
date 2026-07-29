@@ -103,6 +103,14 @@ void SimConnection::tryMatch()
                 stopAllPeriodicReplies();
             }
 
+            // 停止指定协议的周期回复
+            if (!proto.stopPeriodicProtocolNames.isEmpty()) {
+                for (const auto &name : proto.stopPeriodicProtocolNames) {
+                    emit logMessage(QString("[停止] 协议 '%1' 触发停止指令，停止协议 '%2' 的周期回复").arg(proto.name).arg(name));
+                    stopPeriodicReplyByName(name);
+                }
+            }
+
             // 执行回复
             const ReplyConfig &reply = proto.replyConfig;
             if (reply.mode == ReplyMode::Once) {
@@ -179,4 +187,28 @@ void SimConnection::stopAllPeriodicReplies()
         }
     }
     m_periodicTimers.clear();
+}
+
+void SimConnection::stopPeriodicReplyByName(const QString &name)
+{
+    // 查找协议名称对应的index
+    int protoIndex = -1;
+    for (int i = 0; i < m_protocols.size(); ++i) {
+        if (m_protocols[i].name == name) {
+            protoIndex = i;
+            break;
+        }
+    }
+    if (protoIndex < 0) return;
+
+    // 停止对应的定时器
+    for (int i = m_periodicTimers.size() - 1; i >= 0; --i) {
+        if (m_periodicTimers[i].protocolIndex == protoIndex) {
+            if (m_periodicTimers[i].timer) {
+                m_periodicTimers[i].timer->stop();
+                delete m_periodicTimers[i].timer;
+            }
+            m_periodicTimers.removeAt(i);
+        }
+    }
 }
