@@ -73,6 +73,7 @@ private:
     QCheckBox *m_activePushCheck;
     QSpinBox *m_pushIntervalSpin;
     QSpinBox *m_fixedFrameLenSpin;
+    QCheckBox *m_stopAllCheck;
 
     // 接收协议Tab
     QTableWidget *m_headerTable;

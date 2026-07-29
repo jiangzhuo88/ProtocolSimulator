@@ -97,6 +97,12 @@ void SimConnection::tryMatch()
             QString addr = m_socket->peerAddress().toString() + ":" + QString::number(m_socket->peerPort());
             emit logMessage(QString("[匹配] 协议 '%1' 匹配成功").arg(proto.name));
 
+            // 如果该协议匹配时需要停止所有周期回复
+            if (proto.stopAllPeriodicOnMatch) {
+                emit logMessage(QString("[停止] 协议 '%1' 触发停止指令，停止所有周期回复").arg(proto.name));
+                stopAllPeriodicReplies();
+            }
+
             // 执行回复
             const ReplyConfig &reply = proto.replyConfig;
             if (reply.mode == ReplyMode::Once) {

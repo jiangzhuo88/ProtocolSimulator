@@ -54,6 +54,9 @@ void ProtocolEditDialog::setupUi()
     m_fixedFrameLenSpin->setValue(0);
     m_fixedFrameLenSpin->setToolTip("0=根据参数自动计算帧长度\n>0=手动指定整帧字节数(数据区未配齐时使用)");
     pushLayout->addWidget(m_fixedFrameLenSpin);
+    m_stopAllCheck = new QCheckBox("匹配时停止所有周期回复");
+    m_stopAllCheck->setToolTip("勾选后，该协议匹配成功时会停止所有正在运行的周期回复(用于停止指令)");
+    pushLayout->addWidget(m_stopAllCheck);
     pushLayout->addStretch();
     mainLayout->addLayout(pushLayout);
 
@@ -63,6 +66,7 @@ void ProtocolEditDialog::setupUi()
     });
     connect(m_pushIntervalSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &ProtocolEditDialog::onParamChanged);
     connect(m_fixedFrameLenSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &ProtocolEditDialog::onParamChanged);
+    connect(m_stopAllCheck, &QCheckBox::toggled, this, &ProtocolEditDialog::onParamChanged);
     connect(m_nameEdit, &QLineEdit::textChanged, this, &ProtocolEditDialog::onParamChanged);
     connect(m_descEdit, &QLineEdit::textChanged, this, &ProtocolEditDialog::onParamChanged);
 
@@ -283,6 +287,7 @@ void ProtocolEditDialog::loadProtocol()
     m_pushIntervalSpin->setValue(m_proto.pushIntervalMs);
     m_pushIntervalSpin->setEnabled(m_proto.isActivePush);
     m_fixedFrameLenSpin->setValue(m_proto.fixedFrameLength);
+    m_stopAllCheck->setChecked(m_proto.stopAllPeriodicOnMatch);
 
     // 帧头参数
     m_headerTable->setRowCount(0);
@@ -543,6 +548,7 @@ void ProtocolEditDialog::saveProtocol()
     m_proto.isActivePush = m_activePushCheck->isChecked();
     m_proto.pushIntervalMs = m_pushIntervalSpin->value();
     m_proto.fixedFrameLength = m_fixedFrameLenSpin->value();
+    m_proto.stopAllPeriodicOnMatch = m_stopAllCheck->isChecked();
 
     // 保存帧头参数
     m_proto.headerParams.clear();
