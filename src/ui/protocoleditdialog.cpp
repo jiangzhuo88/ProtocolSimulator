@@ -1325,8 +1325,9 @@ void ProtocolEditDialog::onSwapByteOrder()
     swapTable(m_dataTable);
     swapTable(m_replyHeaderTable);
     swapTable(m_replyDataTable);
-    swapTable(m_multiHdrTable);
-    swapTable(m_multiDataTable);
+    // 多包配置每个包独立表格, 不参与一键切换大小端
+    // swapTable(m_mpHdrTable);
+    // swapTable(m_mpDataTable);
     m_loading = false;
     updatePreview();
 }
