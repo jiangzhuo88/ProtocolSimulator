@@ -42,25 +42,24 @@ private slots:
     void onCopyRecvToReply();
     void onSwapByteOrder();
 
-    // 分包配置槽
-    void onAddSplitHdr();
-    void onRemoveSplitHdr();
-    void onAddSplitData();
-    void onRemoveSplitData();
-    void onSplitParamChanged();
-    void onPayloadFieldChanged(int index);
-    void onAddPayload();
-    void onRemovePayload();
-    void onLoadPayloadFromFile();
-    void onPastePayloadHex();
+    // 多包配置槽
+    void onAddMultiPacket();
+    void onRemoveMultiPacket();
+    void onMoveMultiPacketUp();
+    void onMoveMultiPacketDown();
+    void onMultiPacketSelected(int index);
+    void onAddMpHdr();
+    void onRemoveMpHdr();
+    void onAddMpData();
+    void onRemoveMpData();
 
     // 右键菜单槽
     void onHeaderTableContextMenu(const QPoint &pos);
     void onDataTableContextMenu(const QPoint &pos);
     void onReplyHeaderTableContextMenu(const QPoint &pos);
     void onReplyDataTableContextMenu(const QPoint &pos);
-    void onSplitHdrTableContextMenu(const QPoint &pos);
-    void onSplitDataTableContextMenu(const QPoint &pos);
+    void onMpHdrTableContextMenu(const QPoint &pos);
+    void onMpDataTableContextMenu(const QPoint &pos);
 
 private:
     void setupUi();
@@ -78,10 +77,11 @@ private:
     // 弹出数组编辑对话框
     void editArrayValues(QTableWidget *table, int row);
 
-    // 分包配置辅助
-    void loadSplitConfig();
-    void saveSplitConfig();
-    void refreshPayloadFieldCombo();
+    // 多包配置辅助
+    void loadMultiPackets();
+    void loadMultiPacketToTables(int index);
+    void saveCurrentMultiPacket();
+    void refreshMultiPacketList();
 
     // 复制粘贴辅助函数
     void copyTableSelection(QTableWidget *table, bool isReplyTable);
@@ -117,17 +117,14 @@ private:
     CollapsibleGroupBox *m_rplHdrGroup;
     CollapsibleGroupBox *m_rplDataGroup;
 
-    // 分包配置
-    CollapsibleGroupBox *m_splitGroup;
-    QCheckBox *m_splitEnableCheck;
-    QTableWidget *m_splitHdrTable;
-    QTableWidget *m_splitDataTable;
-    QComboBox *m_payloadFieldCombo;
-    QSpinBox *m_chunkSizeSpin;
-    QSpinBox *m_intervalSpin;
-    QCheckBox *m_cycleCheck;
-    QSpinBox *m_cycleIntervalSpin;
-    QListWidget *m_payloadList;
+    // 多包配置
+    CollapsibleGroupBox *m_multiPktGroup;
+    QSpinBox *m_mpIntervalSpin;
+    QCheckBox *m_mpCycleCheck;
+    QListWidget *m_mpList;
+    QTableWidget *m_mpHdrTable;
+    QTableWidget *m_mpDataTable;
+    int m_mpCurrentIndex;
 
     // 预览
     QLabel *m_previewLabel;

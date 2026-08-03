@@ -113,22 +113,20 @@ void SimConnection::tryMatch()
 
             // 执行回复
             const ReplyConfig &reply = proto.replyConfig;
-            // 旧MultiPacket配置已无独立UI, 统一按"发送区+分包区"处理: 视为Once
             ReplyMode effMode = reply.mode;
-            if (effMode == ReplyMode::MultiPacket) effMode = ReplyMode::Once;
 
-            if (effMode == ReplyMode::Once) {
+            if (effMode == ReplyMode::Once || effMode == ReplyMode::MultiPacket) {
                 // 1. 发送发送区(主回复帧)
                 QByteArray replyData = proto.buildReplyFrame(m_seqNumber++);
                 m_socket->write(replyData);
                 emit dataSent(replyData, addr);
                 emit logMessage(QString("[发] %1: %2").arg(addr).arg(QString::fromLatin1(replyData.toHex(' '))));
-                // 2. 分包区: 发送区帧发送后, 按模板拆分负载逐包下发
-                if (reply.splitConfig.enabled && !reply.splitConfig.payloads.isEmpty()) {
-                    auto config = QSharedPointer<PacketSplitConfig>::create(reply.splitConfig);
-                    emit logMessage(QString("[分包] 协议 '%1' 发送区已发, 开始分包下发 %2 个负载")
-                                    .arg(proto.name).arg(config->payloads.size()));
-                    sendSplitPackets(config, 0, 0, m_seqNumber);
+                // 2. 多包区: 发送区帧发送后, 按列表顺序逐包下发
+                if (!reply.multiPackets.isEmpty()) {
+                    auto packets = QSharedPointer<QVector<MultiPacketItem>>::create(reply.multiPackets);
+                    emit logMessage(QString("[多包] 协议 '%1' 发送区已发, 开始下发 %2 个包")
+                                    .arg(proto.name).arg(packets->size()));
+                    sendMultiPackets(packets, 0, m_seqNumber, reply.multiPacketIntervalMs);
                 }
             } else if (effMode == ReplyMode::Periodic1s) {
                 startPeriodicReply(i, 1000);
@@ -189,12 +187,12 @@ void SimConnection::startPeriodicReply(int protoIndex, int intervalMs)
         QString addr = m_socket->peerAddress().toString() + ":" + QString::number(m_socket->peerPort());
         emit dataSent(replyData, addr);
         emit logMessage(QString("[发] %1: %2").arg(addr).arg(QString::fromLatin1(replyData.toHex(' '))));
-        // 2. 分包区: 发送区帧发送后, 按模板拆分负载逐包下发
-        if (proto.replyConfig.splitConfig.enabled && !proto.replyConfig.splitConfig.payloads.isEmpty()) {
-            auto config = QSharedPointer<PacketSplitConfig>::create(proto.replyConfig.splitConfig);
-            emit logMessage(QString("[分包] 协议 '%1' 周期发送区已发, 开始分包下发 %2 个负载")
-                            .arg(proto.name).arg(config->payloads.size()));
-            sendSplitPackets(config, 0, 0, m_seqNumber);
+        // 2. 多包区: 仅当开启多包循环时, 每个周期回到包1重发一轮(配合回复周期实现循环)
+        if (proto.replyConfig.multiPacketCycle && !proto.replyConfig.multiPackets.isEmpty()) {
+            auto packets = QSharedPointer<QVector<MultiPacketItem>>::create(proto.replyConfig.multiPackets);
+            emit logMessage(QString("[多包] 协议 '%1' 周期发送区已发, 回到包1重发 %2 个包")
+                            .arg(proto.name).arg(packets->size()));
+            sendMultiPackets(packets, 0, m_seqNumber, proto.replyConfig.multiPacketIntervalMs);
         }
     };
 
@@ -249,58 +247,35 @@ void SimConnection::stopPeriodicReplyByName(const QString &name)
     }
 }
 
-void SimConnection::sendSplitPackets(const QSharedPointer<PacketSplitConfig> config,
-                                     int payloadIndex, int packetIndex, quint64 seq)
+void SimConnection::sendMultiPackets(const QSharedPointer<QVector<MultiPacketItem>> packets,
+                                     int startIndex, quint64 seq, int intervalMs)
 {
-    if (!config) return;
-    if (payloadIndex < 0 || payloadIndex >= config->payloads.size()) return;
+    if (!packets || startIndex < 0 || startIndex >= packets->size()) return;
     if (!m_socket || m_socket->state() != QAbstractSocket::ConnectedState) return;
 
-    const QByteArray &payload = config->payloads[payloadIndex];
-    int chunkSize = config->effectiveChunkSize();
-    if (chunkSize <= 0 || payload.isEmpty()) return;
-
-    int totalPackets = config->calcPacketCount(payload);
-    if (totalPackets <= 0) return;
-    if (packetIndex < 0 || packetIndex >= totalPackets) return;
-
-    // 切片当前包负载
-    int start = packetIndex * chunkSize;
-    int len = qMin(chunkSize, payload.size() - start);
-    if (len <= 0) return;
-    QByteArray chunk = payload.mid(start, len);
-
-    // 按模板构建当前分包帧
-    QByteArray frame = config->buildPacket(packetIndex, totalPackets, chunk, seq);
+    int total = packets->size();
+    const MultiPacketItem &item = packets->at(startIndex);
+    // 构建当前包帧(动态字段PacketIndex/TotalPackets/PacketSize自动填充)
+    QByteArray frame = item.buildFrame(seq, startIndex, total);
     m_socket->write(frame);
 
     QString addr = m_socket->peerAddress().toString() + ":" + QString::number(m_socket->peerPort());
     emit dataSent(frame, addr);
-    emit logMessage(QString("[分包发 %1/%2] 负载%3/%4: %5")
-                    .arg(packetIndex + 1).arg(totalPackets)
-                    .arg(payloadIndex + 1).arg(config->payloads.size())
-                    .arg(QString::fromLatin1(frame.toHex(' '))));
+    emit logMessage(QString("[多包发 %1/%2] %3: %4")
+                    .arg(startIndex + 1).arg(total)
+                    .arg(addr).arg(QString::fromLatin1(frame.toHex(' '))));
 
     // 序列号递增(供下一包使用)
     m_seqNumber = seq + 1;
 
     // 调度下一包
-    if (packetIndex + 1 < totalPackets) {
-        // 同一负载的下一包: 按 intervalMs 间隔
-        int delay = config->intervalMs;
+    if (startIndex + 1 < total) {
+        // 单包delayMs>0时用包级延迟, 否则用默认intervalMs
+        int delay = item.delayMs > 0 ? item.delayMs : intervalMs;
         if (delay < 0) delay = 0;
         quint64 nextSeq = seq + 1;
-        QTimer::singleShot(delay, this, [this, config, payloadIndex, packetIndex, nextSeq]() {
-            sendSplitPackets(config, payloadIndex, packetIndex + 1, nextSeq);
-        });
-    } else if (config->cycleEnabled && config->payloads.size() > 1) {
-        // 当前负载已发完, 切换到下一个负载循环
-        int nextPayload = (payloadIndex + 1) % config->payloads.size();
-        int delay = config->cycleIntervalMs;
-        if (delay < 0) delay = 0;
-        quint64 nextSeq = seq + 1;
-        QTimer::singleShot(delay, this, [this, config, nextPayload, nextSeq]() {
-            sendSplitPackets(config, nextPayload, 0, nextSeq);
+        QTimer::singleShot(delay, this, [this, packets, startIndex, nextSeq, intervalMs]() {
+            sendMultiPackets(packets, startIndex + 1, nextSeq, intervalMs);
         });
     }
 }

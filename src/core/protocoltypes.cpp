@@ -673,41 +673,20 @@ MatchMode ProtocolParam::stringToMatchMode(const QString &s)
     return MatchMode::Exact;
 }
 
-// ==================== PacketSplitConfig ====================
+// ==================== MultiPacketItem ====================
 
-int PacketSplitConfig::effectiveChunkSize() const
+QByteArray MultiPacketItem::buildFrame(quint64 seq, int packetIndex, int totalPackets) const
 {
-    if (chunkSize > 0) return chunkSize;
-    if (payloadFieldIndex >= 0 && payloadFieldIndex < dataParams.size())
-        return dataParams[payloadFieldIndex].byteSize();
-    return 1024;
-}
-
-int PacketSplitConfig::calcPacketCount(const QByteArray &payload) const
-{
-    int cs = effectiveChunkSize();
-    if (cs <= 0 || payload.isEmpty()) return 0;
-    return (payload.size() + cs - 1) / cs;
-}
-
-QByteArray PacketSplitConfig::buildPacket(int packetIndex, int totalPackets,
-                                          const QByteArray &chunk, quint64 seq) const
-{
-    int pktSize = chunk.size();
-
-    // 构建数据区: 负载字段用chunk, 其他字段正常
+    // 先构建数据区
     QByteArray dataArea;
-    for (int i = 0; i < dataParams.size(); ++i) {
-        if (i == payloadFieldIndex) {
-            dataArea += chunk;
-        } else {
-            const auto &p = dataParams[i];
-            if (p.isRandom)
-                dataArea += p.toRandomBytes();
-            else
-                dataArea += p.toBytes(seq, 0, QByteArray(), packetIndex, pktSize, totalPackets);
-        }
+    for (const auto &p : dataParams) {
+        if (p.isRandom)
+            dataArea += p.toRandomBytes();
+        else
+            dataArea += p.toBytes(seq, 0, QByteArray(), packetIndex, dataArea.size(), totalPackets);
     }
+
+    int pktSize = dataArea.size(); // 本包数据区字节数(PacketSize动态字段用)
 
     // 计算帧头总长度
     int headerSize = 0;
@@ -745,15 +724,11 @@ QByteArray PacketSplitConfig::buildPacket(int packetIndex, int totalPackets,
     return finalFrame;
 }
 
-QJsonObject PacketSplitConfig::toJson() const
+QJsonObject MultiPacketItem::toJson() const
 {
     QJsonObject o;
-    o["enabled"] = enabled;
-    o["payloadFieldIndex"] = payloadFieldIndex;
-    o["chunkSize"] = chunkSize;
-    o["intervalMs"] = intervalMs;
-    o["cycleEnabled"] = cycleEnabled;
-    o["cycleIntervalMs"] = cycleIntervalMs;
+    o["name"] = name;
+    o["delayMs"] = delayMs;
 
     QJsonArray hdr;
     for (const auto &p : headerParams) hdr.append(p.toJson());
@@ -762,23 +737,13 @@ QJsonObject PacketSplitConfig::toJson() const
     QJsonArray dat;
     for (const auto &p : dataParams) dat.append(p.toJson());
     o["dataParams"] = dat;
-
-    // 负载数据以hex字符串存储
-    QJsonArray plds;
-    for (const auto &pl : payloads)
-        plds.append(QString::fromLatin1(pl.toHex()));
-    o["payloads"] = plds;
     return o;
 }
 
-void PacketSplitConfig::fromJson(const QJsonObject &o)
+void MultiPacketItem::fromJson(const QJsonObject &o)
 {
-    enabled = o["enabled"].toBool(false);
-    payloadFieldIndex = o["payloadFieldIndex"].toInt(-1);
-    chunkSize = o["chunkSize"].toInt(1024);
-    intervalMs = o["intervalMs"].toInt(100);
-    cycleEnabled = o["cycleEnabled"].toBool(false);
-    cycleIntervalMs = o["cycleIntervalMs"].toInt(1000);
+    name = o["name"].toString();
+    delayMs = o["delayMs"].toInt(0);
 
     headerParams.clear();
     QJsonArray hdr = o["headerParams"].toArray();
@@ -787,13 +752,6 @@ void PacketSplitConfig::fromJson(const QJsonObject &o)
     dataParams.clear();
     QJsonArray dat = o["dataParams"].toArray();
     for (const auto &v : dat) { ProtocolParam p; p.fromJson(v.toObject()); dataParams.append(p); }
-
-    payloads.clear();
-    QJsonArray plds = o["payloads"].toArray();
-    for (const auto &v : plds) {
-        QByteArray pl = QByteArray::fromHex(v.toString().toLatin1());
-        payloads.append(pl);
-    }
 }
 
 // ==================== ReplyConfig ====================
@@ -812,7 +770,11 @@ QJsonObject ReplyConfig::toJson() const
     for (const auto &p : dataParams) dat.append(p.toJson());
     o["dataParams"] = dat;
 
-    o["splitConfig"] = splitConfig.toJson();
+    o["multiPacketIntervalMs"] = multiPacketIntervalMs;
+    o["multiPacketCycle"] = multiPacketCycle;
+    QJsonArray mpArr;
+    for (const auto &mp : multiPackets) mpArr.append(mp.toJson());
+    o["multiPackets"] = mpArr;
     return o;
 }
 
@@ -826,7 +788,12 @@ void ReplyConfig::fromJson(const QJsonObject &o)
     for (const auto &v : hdr) { ProtocolParam p; p.fromJson(v.toObject()); headerParams.append(p); }
     QJsonArray dat = o["dataParams"].toArray();
     for (const auto &v : dat) { ProtocolParam p; p.fromJson(v.toObject()); dataParams.append(p); }
-    splitConfig.fromJson(o["splitConfig"].toObject());
+
+    multiPacketIntervalMs = o["multiPacketIntervalMs"].toInt(100);
+    multiPacketCycle = o["multiPacketCycle"].toBool(false);
+    multiPackets.clear();
+    QJsonArray mpArr = o["multiPackets"].toArray();
+    for (const auto &v : mpArr) { MultiPacketItem mp; mp.fromJson(v.toObject()); multiPackets.append(mp); }
 }
 
 QString ReplyConfig::modeToString(ReplyMode m)

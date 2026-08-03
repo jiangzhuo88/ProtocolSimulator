@@ -12,6 +12,7 @@
 #include <QMimeData>
 #include <QScrollArea>
 #include <QApplication>
+#include <QGroupBox>
 #include <QListWidget>
 #include <QPushButton>
 #include <QDialogButtonBox>
@@ -283,7 +284,7 @@ void ProtocolEditDialog::setupUi()
     auto modeLayout = new QHBoxLayout;
     modeLayout->addWidget(new QLabel("回复模式:"));
     m_replyModeCombo = new QComboBox;
-    m_replyModeCombo->addItems({"不回复", "回复一次", "1秒周期回复", "5秒周期回复", "自定义周期回复"});
+    m_replyModeCombo->addItems({"不回复", "回复一次", "1秒周期回复", "5秒周期回复", "自定义周期回复", "多包回复"});
     modeLayout->addWidget(m_replyModeCombo);
     m_replyIntervalLabel = new QLabel("周期(ms):");
     m_replyIntervalSpin = new QSpinBox;
@@ -340,102 +341,92 @@ void ProtocolEditDialog::setupUi()
     rplUtilLayout->addStretch();
     replyLayout->addLayout(rplUtilLayout);
 
-    // ====== 分包配置(发送区帧发送后, 按模板拆分负载, 逐包间隔下发; 支持多负载循环) ======
-    m_splitGroup = new CollapsibleGroupBox("分包配置 (发送区帧发送后, 按模板拆分负载逐包下发; 字段可关联包序号/包大小)");
-    auto splitContent = new QWidget;
-    auto splitLayout = new QVBoxLayout(splitContent);
+    // ====== 多包配置(多包回复模式: 发送区帧发送后, 按列表顺序逐包下发; 每包独立配置字段) ======
+    m_multiPktGroup = new CollapsibleGroupBox("多包配置 (多包回复模式: 发送区帧后依次发送各包; 每包独立配置, 字段动态类型可设=包序号/总包数/包大小)");
+    auto mpContent = new QWidget;
+    auto mpLayout = new QVBoxLayout(mpContent);
 
-    auto splitTopLayout = new QHBoxLayout;
-    m_splitEnableCheck = new QCheckBox("启用分包");
-    splitTopLayout->addWidget(m_splitEnableCheck);
-    splitTopLayout->addWidget(new QLabel("负载字段:"));
-    m_payloadFieldCombo = new QComboBox;
-    m_payloadFieldCombo->setMinimumWidth(120);
-    splitTopLayout->addWidget(m_payloadFieldCombo);
-    splitTopLayout->addWidget(new QLabel("每包大小(bytes):"));
-    m_chunkSizeSpin = new QSpinBox;
-    m_chunkSizeSpin->setRange(0, 999999);
-    m_chunkSizeSpin->setValue(1024);
-    m_chunkSizeSpin->setToolTip("0=用负载字段的userLength");
-    splitTopLayout->addWidget(m_chunkSizeSpin);
-    splitTopLayout->addWidget(new QLabel("包间间隔(ms):"));
-    m_intervalSpin = new QSpinBox;
-    m_intervalSpin->setRange(0, 999999);
-    m_intervalSpin->setValue(100);
-    splitTopLayout->addWidget(m_intervalSpin);
-    splitTopLayout->addStretch();
-    splitLayout->addLayout(splitTopLayout);
+    // 顶部: 包间间隔 + 循环开关
+    auto mpTopLayout = new QHBoxLayout;
+    mpTopLayout->addWidget(new QLabel("包间间隔(ms):"));
+    m_mpIntervalSpin = new QSpinBox;
+    m_mpIntervalSpin->setRange(0, 999999);
+    m_mpIntervalSpin->setValue(100);
+    m_mpIntervalSpin->setToolTip("相邻包发送间隔; 单包若设了delayMs则以包级延迟优先");
+    mpTopLayout->addWidget(m_mpIntervalSpin);
+    m_mpCycleCheck = new QCheckBox("多包循环(配合回复周期: 周期模式下每轮回到包1重发)");
+    m_mpCycleCheck->setToolTip("勾选后, 在'1秒/5秒/自定义周期回复'模式下, 每个周期都会重新从包1发送一轮多包");
+    mpTopLayout->addWidget(m_mpCycleCheck);
+    mpTopLayout->addStretch();
+    mpLayout->addLayout(mpTopLayout);
 
-    auto splitCycleLayout = new QHBoxLayout;
-    m_cycleCheck = new QCheckBox("多负载循环(发完一个负载后, 延时后发下一个, 循环往复)");
-    splitCycleLayout->addWidget(m_cycleCheck);
-    splitCycleLayout->addWidget(new QLabel("循环间隔(ms):"));
-    m_cycleIntervalSpin = new QSpinBox;
-    m_cycleIntervalSpin->setRange(0, 999999);
-    m_cycleIntervalSpin->setValue(1000);
-    splitCycleLayout->addWidget(m_cycleIntervalSpin);
-    splitCycleLayout->addStretch();
-    splitLayout->addLayout(splitCycleLayout);
+    // 中部: 左侧包列表 + 右侧当前包字段表
+    auto mpMidLayout = new QHBoxLayout;
+    // 左侧: 包列表
+    auto mpLeftLayout = new QVBoxLayout;
+    m_mpList = new QListWidget;
+    m_mpList->setMaximumWidth(180);
+    m_mpList->setAlternatingRowColors(true);
+    mpLeftLayout->addWidget(m_mpList);
+    auto mpListBtnLayout = new QHBoxLayout;
+    auto btnAddMp = new QPushButton("添加包");
+    auto btnDelMp = new QPushButton("删除包");
+    mpListBtnLayout->addWidget(btnAddMp);
+    mpListBtnLayout->addWidget(btnDelMp);
+    mpLeftLayout->addLayout(mpListBtnLayout);
+    auto mpMoveBtnLayout = new QHBoxLayout;
+    auto btnMpUp = new QPushButton("上移");
+    auto btnMpDown = new QPushButton("下移");
+    mpMoveBtnLayout->addWidget(btnMpUp);
+    mpMoveBtnLayout->addWidget(btnMpDown);
+    mpLeftLayout->addLayout(mpMoveBtnLayout);
+    mpLeftLayout->addStretch();
+    mpMidLayout->addLayout(mpLeftLayout, 0);
 
-    // 包模板帧头参数
-    auto splitHdrGroup = new CollapsibleGroupBox("包模板帧头参数 (可设动态类型=分包序号/分包大小/总包数; 右键复制/粘贴)");
-    auto splitHdrContent = new QWidget;
-    auto splitHdrLayout = new QVBoxLayout(splitHdrContent);
-    m_splitHdrTable = new QTableWidget(0, 11);
-    m_splitHdrTable->setHorizontalHeaderLabels({"名称","类型","字节序/长度","数组","默认值","动态类型","动态参数","随机","随机最小","随机最大","随机长度"});
+    // 右侧: 当前选中包的帧头+数据区表格
+    auto mpRightLayout = new QVBoxLayout;
+    // 包帧头参数
+    auto mpHdrGroup = new QGroupBox("当前包帧头参数 (右键复制/粘贴; 动态类型可设PacketIndex/TotalPackets/PacketSize)");
+    auto mpHdrLayout = new QVBoxLayout(mpHdrGroup);
+    m_mpHdrTable = new QTableWidget(0, 11);
+    m_mpHdrTable->setHorizontalHeaderLabels({"名称","类型","字节序/长度","数组","默认值","动态类型","动态参数","随机","随机最小","随机最大","随机长度"});
     for (int i = 0; i < 11; ++i)
-        m_splitHdrTable->horizontalHeader()->setSectionResizeMode(i, QHeaderView::Stretch);
-    m_splitHdrTable->setContextMenuPolicy(Qt::CustomContextMenu);
-    splitHdrLayout->addWidget(m_splitHdrTable);
-    auto splitHdrBtnLayout = new QHBoxLayout;
-    auto btnAddSHdr = new QPushButton("添加帧头参数");
-    auto btnDelSHdr = new QPushButton("删除选中");
-    splitHdrBtnLayout->addWidget(btnAddSHdr);
-    splitHdrBtnLayout->addWidget(btnDelSHdr);
-    splitHdrBtnLayout->addStretch();
-    splitHdrLayout->addLayout(splitHdrBtnLayout);
-    splitHdrGroup->setContentWidget(splitHdrContent);
-    splitLayout->addWidget(splitHdrGroup);
+        m_mpHdrTable->horizontalHeader()->setSectionResizeMode(i, QHeaderView::Stretch);
+    m_mpHdrTable->setContextMenuPolicy(Qt::CustomContextMenu);
+    mpHdrLayout->addWidget(m_mpHdrTable);
+    auto mpHdrBtnLayout = new QHBoxLayout;
+    auto btnAddMpHdr = new QPushButton("添加帧头参数");
+    auto btnDelMpHdr = new QPushButton("删除选中");
+    mpHdrBtnLayout->addWidget(btnAddMpHdr);
+    mpHdrBtnLayout->addWidget(btnDelMpHdr);
+    mpHdrBtnLayout->addStretch();
+    mpHdrLayout->addLayout(mpHdrBtnLayout);
+    mpRightLayout->addWidget(mpHdrGroup);
 
-    // 包模板数据区参数
-    auto splitDataGroup = new CollapsibleGroupBox("包模板数据区参数 (其中一个字段设为负载字段; 右键复制/粘贴)");
-    auto splitDataContent = new QWidget;
-    auto splitDataLayout = new QVBoxLayout(splitDataContent);
-    m_splitDataTable = new QTableWidget(0, 11);
-    m_splitDataTable->setHorizontalHeaderLabels({"名称","类型","字节序/长度","数组","默认值","动态类型","动态参数","随机","随机最小","随机最大","随机长度"});
+    // 包数据区参数
+    auto mpDataGroup = new QGroupBox("当前包数据区参数 (右键复制/粘贴)");
+    auto mpDataLayout = new QVBoxLayout(mpDataGroup);
+    m_mpDataTable = new QTableWidget(0, 11);
+    m_mpDataTable->setHorizontalHeaderLabels({"名称","类型","字节序/长度","数组","默认值","动态类型","动态参数","随机","随机最小","随机最大","随机长度"});
     for (int i = 0; i < 11; ++i)
-        m_splitDataTable->horizontalHeader()->setSectionResizeMode(i, QHeaderView::Stretch);
-    m_splitDataTable->setContextMenuPolicy(Qt::CustomContextMenu);
-    splitDataLayout->addWidget(m_splitDataTable);
-    auto splitDataBtnLayout = new QHBoxLayout;
-    auto btnAddSData = new QPushButton("添加数据区参数");
-    auto btnDelSData = new QPushButton("删除选中");
-    splitDataBtnLayout->addWidget(btnAddSData);
-    splitDataBtnLayout->addWidget(btnDelSData);
-    splitDataBtnLayout->addStretch();
-    splitDataLayout->addLayout(splitDataBtnLayout);
-    splitDataGroup->setContentWidget(splitDataContent);
-    splitLayout->addWidget(splitDataGroup);
+        m_mpDataTable->horizontalHeader()->setSectionResizeMode(i, QHeaderView::Stretch);
+    m_mpDataTable->setContextMenuPolicy(Qt::CustomContextMenu);
+    mpDataLayout->addWidget(m_mpDataTable);
+    auto mpDataBtnLayout = new QHBoxLayout;
+    auto btnAddMpData = new QPushButton("添加数据区参数");
+    auto btnDelMpData = new QPushButton("删除选中");
+    mpDataBtnLayout->addWidget(btnAddMpData);
+    mpDataBtnLayout->addWidget(btnDelMpData);
+    mpDataBtnLayout->addStretch();
+    mpDataLayout->addLayout(mpDataBtnLayout);
+    mpRightLayout->addWidget(mpDataGroup);
+    mpMidLayout->addLayout(mpRightLayout, 1);
+    mpLayout->addLayout(mpMidLayout);
 
-    // 负载数据列表
-    auto splitPayloadLayout = new QHBoxLayout;
-    m_payloadList = new QListWidget;
-    m_payloadList->setMaximumHeight(100);
-    m_payloadList->setAlternatingRowColors(true);
-    splitPayloadLayout->addWidget(m_payloadList);
-    auto payloadBtnLayout = new QVBoxLayout;
-    auto btnAddPayload = new QPushButton("添加负载(粘贴Hex)");
-    auto btnLoadFile = new QPushButton("从文件加载");
-    auto btnDelPayload = new QPushButton("删除选中");
-    payloadBtnLayout->addWidget(btnAddPayload);
-    payloadBtnLayout->addWidget(btnLoadFile);
-    payloadBtnLayout->addWidget(btnDelPayload);
-    payloadBtnLayout->addStretch();
-    splitPayloadLayout->addLayout(payloadBtnLayout);
-    splitLayout->addLayout(splitPayloadLayout);
+    m_multiPktGroup->setContentWidget(mpContent);
+    replyLayout->addWidget(m_multiPktGroup);
 
-    m_splitGroup->setContentWidget(splitContent);
-    replyLayout->addWidget(m_splitGroup);
+    m_mpCurrentIndex = -1;
 
     tabWidget->addTab(replyTab, "回复配置");
 
@@ -450,22 +441,22 @@ void ProtocolEditDialog::setupUi()
     connect(m_replyHeaderTable, &QTableWidget::customContextMenuRequested, this, &ProtocolEditDialog::onReplyHeaderTableContextMenu);
     connect(m_replyDataTable, &QTableWidget::customContextMenuRequested, this, &ProtocolEditDialog::onReplyDataTableContextMenu);
 
-    // 分包配置信号连接
-    connect(m_splitEnableCheck, &QCheckBox::toggled, this, &ProtocolEditDialog::onParamChanged);
-    connect(m_payloadFieldCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &ProtocolEditDialog::onPayloadFieldChanged);
-    connect(m_chunkSizeSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &ProtocolEditDialog::onParamChanged);
-    connect(m_intervalSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &ProtocolEditDialog::onParamChanged);
-    connect(m_cycleCheck, &QCheckBox::toggled, this, &ProtocolEditDialog::onParamChanged);
-    connect(m_cycleIntervalSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &ProtocolEditDialog::onParamChanged);
-    connect(btnAddSHdr, &QPushButton::clicked, this, &ProtocolEditDialog::onAddSplitHdr);
-    connect(btnDelSHdr, &QPushButton::clicked, this, &ProtocolEditDialog::onRemoveSplitHdr);
-    connect(btnAddSData, &QPushButton::clicked, this, &ProtocolEditDialog::onAddSplitData);
-    connect(btnDelSData, &QPushButton::clicked, this, &ProtocolEditDialog::onRemoveSplitData);
-    connect(m_splitHdrTable, &QTableWidget::customContextMenuRequested, this, &ProtocolEditDialog::onSplitHdrTableContextMenu);
-    connect(m_splitDataTable, &QTableWidget::customContextMenuRequested, this, &ProtocolEditDialog::onSplitDataTableContextMenu);
-    connect(btnAddPayload, &QPushButton::clicked, this, &ProtocolEditDialog::onAddPayload);
-    connect(btnLoadFile, &QPushButton::clicked, this, &ProtocolEditDialog::onLoadPayloadFromFile);
-    connect(btnDelPayload, &QPushButton::clicked, this, &ProtocolEditDialog::onRemovePayload);
+    // 多包配置信号连接
+    connect(m_mpIntervalSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &ProtocolEditDialog::onParamChanged);
+    connect(m_mpCycleCheck, &QCheckBox::toggled, this, &ProtocolEditDialog::onParamChanged);
+    connect(btnAddMp, &QPushButton::clicked, this, &ProtocolEditDialog::onAddMultiPacket);
+    connect(btnDelMp, &QPushButton::clicked, this, &ProtocolEditDialog::onRemoveMultiPacket);
+    connect(btnMpUp, &QPushButton::clicked, this, &ProtocolEditDialog::onMoveMultiPacketUp);
+    connect(btnMpDown, &QPushButton::clicked, this, &ProtocolEditDialog::onMoveMultiPacketDown);
+    connect(m_mpList, &QListWidget::currentRowChanged, this, &ProtocolEditDialog::onMultiPacketSelected);
+    connect(btnAddMpHdr, &QPushButton::clicked, this, &ProtocolEditDialog::onAddMpHdr);
+    connect(btnDelMpHdr, &QPushButton::clicked, this, &ProtocolEditDialog::onRemoveMpHdr);
+    connect(btnAddMpData, &QPushButton::clicked, this, &ProtocolEditDialog::onAddMpData);
+    connect(btnDelMpData, &QPushButton::clicked, this, &ProtocolEditDialog::onRemoveMpData);
+    connect(m_mpHdrTable, &QTableWidget::customContextMenuRequested, this, &ProtocolEditDialog::onMpHdrTableContextMenu);
+    connect(m_mpDataTable, &QTableWidget::customContextMenuRequested, this, &ProtocolEditDialog::onMpDataTableContextMenu);
+    m_mpHdrTable->installEventFilter(wheelFilter);
+    m_mpDataTable->installEventFilter(wheelFilter);
 
     mainLayout->addWidget(tabWidget);
 
@@ -565,9 +556,8 @@ void ProtocolEditDialog::loadProtocol()
         populateParamRow(m_dataTable, row, p, false);
     }
 
-    // 回复模式(兼容旧MultiPacket配置: 映射为Once, 分包由分包配置区承载)
+    // 回复模式(MultiPacket为独立模式, 发送区帧+多包)
     int modeIdx = (int)m_proto.replyConfig.mode;
-    if (modeIdx == (int)ReplyMode::MultiPacket) modeIdx = (int)ReplyMode::Once;
     m_replyModeCombo->setCurrentIndex(modeIdx);
     m_replyIntervalSpin->setValue(m_proto.replyConfig.customIntervalMs);
     onReplyModeChanged(modeIdx);
@@ -588,8 +578,8 @@ void ProtocolEditDialog::loadProtocol()
         populateParamRow(m_replyDataTable, row, p, true);
     }
 
-    // 分包配置加载
-    loadSplitConfig();
+    // 多包配置加载
+    loadMultiPackets();
 
     m_loading = false;
 
@@ -972,7 +962,9 @@ void ProtocolEditDialog::saveProtocol()
         m_proto.replyConfig.dataParams.append(readParamRow(m_replyDataTable, i, true));
 
     // 保存分包配置
-    saveSplitConfig();
+    saveCurrentMultiPacket();
+    m_proto.replyConfig.multiPacketIntervalMs = m_mpIntervalSpin->value();
+    m_proto.replyConfig.multiPacketCycle = m_mpCycleCheck->isChecked();
 }
 
 ProtocolConfig ProtocolEditDialog::getProtocol() const
@@ -1037,211 +1029,179 @@ void ProtocolEditDialog::onReplyModeChanged(int index)
     bool isCustom = (index == (int)ReplyMode::PeriodicCustom);
     m_replyIntervalLabel->setVisible(isCustom);
     m_replyIntervalSpin->setVisible(isCustom);
-    // 发送区(回复帧头/数据区)与分包配置始终显示, 适用于所有回复模式
+    // 发送区(回复帧头/数据区)与多包配置始终显示, 适用于所有回复模式
     if (!m_loading) updatePreview();
 }
 
-// ================== 分包配置实现 ==================
+// ================== 多包配置实现 ==================
 
-void ProtocolEditDialog::refreshPayloadFieldCombo()
+void ProtocolEditDialog::refreshMultiPacketList()
 {
-    m_payloadFieldCombo->blockSignals(true);
-    int prev = m_payloadFieldCombo->currentIndex();
-    m_payloadFieldCombo->clear();
-    m_payloadFieldCombo->addItem("(无负载字段)", -1);
-    for (int i = 0; i < m_splitDataTable->rowCount(); ++i) {
-        // 读取字段名称
-        QString name;
-        auto nameItem = m_splitDataTable->item(i, 0);
-        if (nameItem) name = nameItem->text();
-        if (name.isEmpty()) name = QString("字段%1").arg(i);
-        m_payloadFieldCombo->addItem(QString("%1: %2").arg(i).arg(name), i);
+    m_mpList->blockSignals(true);
+    int prev = m_mpCurrentIndex;
+    m_mpList->clear();
+    for (int i = 0; i < m_proto.replyConfig.multiPackets.size(); ++i) {
+        const auto &mp = m_proto.replyConfig.multiPackets[i];
+        QString name = mp.name.isEmpty() ? QString("包%1").arg(i + 1) : mp.name;
+        m_mpList->addItem(QString("%1: %2").arg(i + 1).arg(name));
     }
-    // 恢复选中
-    if (prev >= 0 && prev < m_payloadFieldCombo->count())
-        m_payloadFieldCombo->setCurrentIndex(prev);
-    m_payloadFieldCombo->blockSignals(false);
+    if (prev >= 0 && prev < m_mpList->count())
+        m_mpList->setCurrentRow(prev);
+    m_mpList->blockSignals(false);
 }
 
-void ProtocolEditDialog::loadSplitConfig()
+void ProtocolEditDialog::loadMultiPackets()
 {
     m_loading = true;
-    const PacketSplitConfig &sc = m_proto.replyConfig.splitConfig;
-    m_splitEnableCheck->setChecked(sc.enabled);
-    m_chunkSizeSpin->setValue(sc.chunkSize);
-    m_intervalSpin->setValue(sc.intervalMs);
-    m_cycleCheck->setChecked(sc.cycleEnabled);
-    m_cycleIntervalSpin->setValue(sc.cycleIntervalMs);
-
-    // 加载模板帧头
-    m_splitHdrTable->setRowCount(0);
-    for (const auto &p : sc.headerParams) {
-        int row = m_splitHdrTable->rowCount();
-        m_splitHdrTable->insertRow(row);
-        populateParamRow(m_splitHdrTable, row, p, true);
+    m_mpIntervalSpin->setValue(m_proto.replyConfig.multiPacketIntervalMs);
+    m_mpCycleCheck->setChecked(m_proto.replyConfig.multiPacketCycle);
+    refreshMultiPacketList();
+    if (m_proto.replyConfig.multiPackets.isEmpty()) {
+        m_mpCurrentIndex = -1;
+        m_mpHdrTable->setRowCount(0);
+        m_mpDataTable->setRowCount(0);
+    } else {
+        m_mpCurrentIndex = 0;
+        m_mpList->setCurrentRow(0);
+        loadMultiPacketToTables(0);
     }
-
-    // 加载模板数据区
-    m_splitDataTable->setRowCount(0);
-    for (const auto &p : sc.dataParams) {
-        int row = m_splitDataTable->rowCount();
-        m_splitDataTable->insertRow(row);
-        populateParamRow(m_splitDataTable, row, p, true);
-    }
-
-    // 刷新负载字段下拉
-    refreshPayloadFieldCombo();
-    // 设置负载字段选中
-    int comboIdx = m_payloadFieldCombo->findData(sc.payloadFieldIndex);
-    if (comboIdx >= 0) m_payloadFieldCombo->setCurrentIndex(comboIdx);
-
-    // 加载负载列表
-    m_payloadList->clear();
-    for (int i = 0; i < sc.payloads.size(); ++i) {
-        QString text = QString("负载%1 (%2 bytes)").arg(i + 1).arg(sc.payloads[i].size());
-        m_payloadList->addItem(text);
-    }
-
     m_loading = false;
     updatePreview();
 }
 
-void ProtocolEditDialog::saveSplitConfig()
+void ProtocolEditDialog::loadMultiPacketToTables(int index)
 {
-    PacketSplitConfig &sc = m_proto.replyConfig.splitConfig;
-    sc.enabled = m_splitEnableCheck->isChecked();
-    sc.chunkSize = m_chunkSizeSpin->value();
-    sc.intervalMs = m_intervalSpin->value();
-    sc.cycleEnabled = m_cycleCheck->isChecked();
-    sc.cycleIntervalMs = m_cycleIntervalSpin->value();
-
-    // 负载字段索引(从combobox data获取)
-    sc.payloadFieldIndex = m_payloadFieldCombo->currentData().toInt();
-
-    sc.headerParams.clear();
-    for (int i = 0; i < m_splitHdrTable->rowCount(); ++i)
-        sc.headerParams.append(readParamRow(m_splitHdrTable, i, true));
-
-    sc.dataParams.clear();
-    for (int i = 0; i < m_splitDataTable->rowCount(); ++i)
-        sc.dataParams.append(readParamRow(m_splitDataTable, i, true));
-
-    // payloads已在添加/删除时直接操作m_proto, 此处无需重复保存
-}
-
-void ProtocolEditDialog::onAddSplitHdr()
-{
-    addParamRow(m_splitHdrTable, true);
-    updatePreview();
-}
-
-void ProtocolEditDialog::onRemoveSplitHdr()
-{
-    int row = m_splitHdrTable->currentRow();
-    if (row >= 0) m_splitHdrTable->removeRow(row);
-    updatePreview();
-}
-
-void ProtocolEditDialog::onAddSplitData()
-{
-    addParamRow(m_splitDataTable, true);
-    refreshPayloadFieldCombo();
-    updatePreview();
-}
-
-void ProtocolEditDialog::onRemoveSplitData()
-{
-    int row = m_splitDataTable->currentRow();
-    if (row >= 0) {
-        m_splitDataTable->removeRow(row);
-        refreshPayloadFieldCombo();
+    if (index < 0 || index >= m_proto.replyConfig.multiPackets.size()) {
+        m_mpHdrTable->setRowCount(0);
+        m_mpDataTable->setRowCount(0);
+        return;
     }
-    updatePreview();
-}
-
-void ProtocolEditDialog::onSplitParamChanged()
-{
-    if (m_loading) return;
-    updatePreview();
-}
-
-void ProtocolEditDialog::onPayloadFieldChanged(int index)
-{
-    if (m_loading) return;
-    // 不需要额外操作, saveSplitConfig会从combo读取
-    updatePreview();
-}
-
-void ProtocolEditDialog::onAddPayload()
-{
-    // 从剪贴板粘贴Hex数据作为负载
-    QClipboard *clip = QGuiApplication::clipboard();
-    QString text = clip->text().trimmed();
-    if (text.isEmpty()) {
-        // 如果剪贴板为空, 弹出输入对话框
-        bool ok;
-        text = QInputDialog::getMultiLineText(this, "添加负载", "输入Hex数据(如: 01 02 03 FF):", "", &ok);
-        if (!ok || text.trimmed().isEmpty()) return;
+    const MultiPacketItem &mp = m_proto.replyConfig.multiPackets[index];
+    m_mpHdrTable->setRowCount(0);
+    for (const auto &p : mp.headerParams) {
+        int row = m_mpHdrTable->rowCount();
+        m_mpHdrTable->insertRow(row);
+        populateParamRow(m_mpHdrTable, row, p, true);
     }
-    QString s = text;
-    s.remove(' ').remove('\n').remove('\t').remove('\r');
-    if (s.startsWith("0x", Qt::CaseInsensitive)) s.remove(0, 2);
-    QByteArray payload = QByteArray::fromHex(s.toLatin1());
-    if (payload.isEmpty()) return;
+    m_mpDataTable->setRowCount(0);
+    for (const auto &p : mp.dataParams) {
+        int row = m_mpDataTable->rowCount();
+        m_mpDataTable->insertRow(row);
+        populateParamRow(m_mpDataTable, row, p, true);
+    }
+}
 
-    m_proto.replyConfig.splitConfig.payloads.append(payload);
-    QString label = QString("负载%1 (%2 bytes)").arg(m_payloadList->count() + 1).arg(payload.size());
-    m_payloadList->addItem(label);
+void ProtocolEditDialog::saveCurrentMultiPacket()
+{
+    if (m_mpCurrentIndex < 0 || m_mpCurrentIndex >= m_proto.replyConfig.multiPackets.size())
+        return;
+    MultiPacketItem &mp = m_proto.replyConfig.multiPackets[m_mpCurrentIndex];
+    mp.headerParams.clear();
+    for (int i = 0; i < m_mpHdrTable->rowCount(); ++i)
+        mp.headerParams.append(readParamRow(m_mpHdrTable, i, true));
+    mp.dataParams.clear();
+    for (int i = 0; i < m_mpDataTable->rowCount(); ++i)
+        mp.dataParams.append(readParamRow(m_mpDataTable, i, true));
+}
+
+void ProtocolEditDialog::onAddMultiPacket()
+{
+    if (!m_loading) saveCurrentMultiPacket();
+    MultiPacketItem mp;
+    mp.name = QString("包%1").arg(m_proto.replyConfig.multiPackets.size() + 1);
+    m_proto.replyConfig.multiPackets.append(mp);
+    m_mpCurrentIndex = m_proto.replyConfig.multiPackets.size() - 1;
+    refreshMultiPacketList();
+    m_mpList->setCurrentRow(m_mpCurrentIndex);
+    loadMultiPacketToTables(m_mpCurrentIndex);
     updatePreview();
 }
 
-void ProtocolEditDialog::onLoadPayloadFromFile()
+void ProtocolEditDialog::onRemoveMultiPacket()
 {
-    QString path = QFileDialog::getOpenFileName(this, "选择负载文件", QString(), "所有文件 (*);;二进制文件 (*.bin *.dat);;图片 (*.png *.jpg *.bmp)");
-    if (path.isEmpty()) return;
-    QFile f(path);
-    if (!f.open(QIODevice::ReadOnly)) return;
-    QByteArray payload = f.readAll();
-    f.close();
-    if (payload.isEmpty()) return;
-
-    m_proto.replyConfig.splitConfig.payloads.append(payload);
-    QFileInfo fi(path);
-    QString label = QString("负载%1: %2 (%3 bytes)")
-                    .arg(m_payloadList->count() + 1)
-                    .arg(fi.fileName())
-                    .arg(payload.size());
-    m_payloadList->addItem(label);
-    updatePreview();
-}
-
-void ProtocolEditDialog::onRemovePayload()
-{
-    int row = m_payloadList->currentRow();
+    int row = m_mpList->currentRow();
     if (row < 0) return;
-    m_proto.replyConfig.splitConfig.payloads.removeAt(row);
-    m_payloadList->takeItem(row);
+    m_proto.replyConfig.multiPackets.removeAt(row);
+    m_mpCurrentIndex = qMin(row, m_proto.replyConfig.multiPackets.size() - 1);
+    refreshMultiPacketList();
+    if (m_mpCurrentIndex >= 0) {
+        m_mpList->setCurrentRow(m_mpCurrentIndex);
+        loadMultiPacketToTables(m_mpCurrentIndex);
+    } else {
+        m_mpHdrTable->setRowCount(0);
+        m_mpDataTable->setRowCount(0);
+    }
     updatePreview();
 }
 
-void ProtocolEditDialog::onSplitHdrTableContextMenu(const QPoint &pos)
+void ProtocolEditDialog::onMoveMultiPacketUp()
 {
-    QMenu menu(this);
-    auto actCopySel = menu.addAction("复制选中行");
-    auto actCopyAll = menu.addAction("复制整表");
-    auto actPaste = menu.addAction("粘贴");
-    auto actClear = menu.addAction("清空整表");
-    auto actDel = menu.addAction("删除选中行");
-
-    QAction *selected = menu.exec(m_splitHdrTable->viewport()->mapToGlobal(pos));
-    if (selected == actCopySel) copyTableSelection(m_splitHdrTable, true);
-    else if (selected == actCopyAll) copyTableAll(m_splitHdrTable, true);
-    else if (selected == actPaste) pasteToTable(m_splitHdrTable, true);
-    else if (selected == actClear) { m_splitHdrTable->setRowCount(0); updatePreview(); }
-    else if (selected == actDel) onRemoveSplitHdr();
+    int row = m_mpList->currentRow();
+    if (row <= 0) return;
+    saveCurrentMultiPacket();
+    m_proto.replyConfig.multiPackets.swapItemsAt(row, row - 1);
+    m_mpCurrentIndex = row - 1;
+    refreshMultiPacketList();
+    m_mpList->setCurrentRow(m_mpCurrentIndex);
+    loadMultiPacketToTables(m_mpCurrentIndex);
+    updatePreview();
 }
 
-void ProtocolEditDialog::onSplitDataTableContextMenu(const QPoint &pos)
+void ProtocolEditDialog::onMoveMultiPacketDown()
+{
+    int row = m_mpList->currentRow();
+    if (row < 0 || row >= m_proto.replyConfig.multiPackets.size() - 1) return;
+    saveCurrentMultiPacket();
+    m_proto.replyConfig.multiPackets.swapItemsAt(row, row + 1);
+    m_mpCurrentIndex = row + 1;
+    refreshMultiPacketList();
+    m_mpList->setCurrentRow(m_mpCurrentIndex);
+    loadMultiPacketToTables(m_mpCurrentIndex);
+    updatePreview();
+}
+
+void ProtocolEditDialog::onMultiPacketSelected(int index)
+{
+    if (m_loading) return;
+    saveCurrentMultiPacket();
+    m_mpCurrentIndex = index;
+    loadMultiPacketToTables(index);
+    updatePreview();
+}
+
+void ProtocolEditDialog::onAddMpHdr()
+{
+    if (m_mpCurrentIndex < 0) { onAddMultiPacket(); return; }
+    addParamRow(m_mpHdrTable, true);
+    if (!m_loading) saveCurrentMultiPacket();
+    updatePreview();
+}
+
+void ProtocolEditDialog::onRemoveMpHdr()
+{
+    int row = m_mpHdrTable->currentRow();
+    if (row >= 0) m_mpHdrTable->removeRow(row);
+    if (!m_loading) saveCurrentMultiPacket();
+    updatePreview();
+}
+
+void ProtocolEditDialog::onAddMpData()
+{
+    if (m_mpCurrentIndex < 0) { onAddMultiPacket(); return; }
+    addParamRow(m_mpDataTable, true);
+    if (!m_loading) saveCurrentMultiPacket();
+    updatePreview();
+}
+
+void ProtocolEditDialog::onRemoveMpData()
+{
+    int row = m_mpDataTable->currentRow();
+    if (row >= 0) m_mpDataTable->removeRow(row);
+    if (!m_loading) saveCurrentMultiPacket();
+    updatePreview();
+}
+
+void ProtocolEditDialog::onMpHdrTableContextMenu(const QPoint &pos)
 {
     QMenu menu(this);
     auto actCopySel = menu.addAction("复制选中行");
@@ -1250,12 +1210,29 @@ void ProtocolEditDialog::onSplitDataTableContextMenu(const QPoint &pos)
     auto actClear = menu.addAction("清空整表");
     auto actDel = menu.addAction("删除选中行");
 
-    QAction *selected = menu.exec(m_splitDataTable->viewport()->mapToGlobal(pos));
-    if (selected == actCopySel) copyTableSelection(m_splitDataTable, true);
-    else if (selected == actCopyAll) copyTableAll(m_splitDataTable, true);
-    else if (selected == actPaste) pasteToTable(m_splitDataTable, true);
-    else if (selected == actClear) { m_splitDataTable->setRowCount(0); refreshPayloadFieldCombo(); updatePreview(); }
-    else if (selected == actDel) onRemoveSplitData();
+    QAction *selected = menu.exec(m_mpHdrTable->viewport()->mapToGlobal(pos));
+    if (selected == actCopySel) copyTableSelection(m_mpHdrTable, true);
+    else if (selected == actCopyAll) copyTableAll(m_mpHdrTable, true);
+    else if (selected == actPaste) pasteToTable(m_mpHdrTable, true);
+    else if (selected == actClear) { m_mpHdrTable->setRowCount(0); if (!m_loading) saveCurrentMultiPacket(); updatePreview(); }
+    else if (selected == actDel) onRemoveMpHdr();
+}
+
+void ProtocolEditDialog::onMpDataTableContextMenu(const QPoint &pos)
+{
+    QMenu menu(this);
+    auto actCopySel = menu.addAction("复制选中行");
+    auto actCopyAll = menu.addAction("复制整表");
+    auto actPaste = menu.addAction("粘贴");
+    auto actClear = menu.addAction("清空整表");
+    auto actDel = menu.addAction("删除选中行");
+
+    QAction *selected = menu.exec(m_mpDataTable->viewport()->mapToGlobal(pos));
+    if (selected == actCopySel) copyTableSelection(m_mpDataTable, true);
+    else if (selected == actCopyAll) copyTableAll(m_mpDataTable, true);
+    else if (selected == actPaste) pasteToTable(m_mpDataTable, true);
+    else if (selected == actClear) { m_mpDataTable->setRowCount(0); if (!m_loading) saveCurrentMultiPacket(); updatePreview(); }
+    else if (selected == actDel) onRemoveMpData();
 }
 
 void ProtocolEditDialog::onPreviewTimer()
@@ -1735,42 +1712,28 @@ void ProtocolEditDialog::updatePreview()
     replyDetail += QString("<b>发送区(主回复帧) %1字节:</b><br>").arg(replyFrame.size());
     replyDetail += buildFrameDetail(replyFrame, m_proto.replyConfig.headerParams, m_proto.replyConfig.dataParams);
 
-    // 分包区(发送区帧发送后, 按模板拆分负载逐包下发)
-    const auto &sc = m_proto.replyConfig.splitConfig;
-    if (!sc.enabled) {
-        replyDetail += "<br><font color='gray'>分包未启用, 仅发送发送区帧</font>";
-    } else if (sc.payloads.isEmpty()) {
-        replyDetail += "<br><font color='orange'>分包已启用但无负载数据</font>";
+    // 多包区(发送区帧发送后, 按列表顺序逐包下发)
+    const auto &mps = m_proto.replyConfig.multiPackets;
+    if (mps.isEmpty()) {
+        replyDetail += "<br><font color='gray'>无多包配置, 仅发送发送区帧</font>";
     } else {
-        int chunkSz = sc.effectiveChunkSize();
-        replyDetail += QString("<br><b>分包配置: 已启用 (每包%1字节, 间隔%2ms")
-                       .arg(chunkSz).arg(sc.intervalMs);
-        if (sc.cycleEnabled)
-            replyDetail += QString(", 循环间隔%1ms").arg(sc.cycleIntervalMs);
-        replyDetail += ")</b><br>";
-
-        for (int pi = 0; pi < sc.payloads.size(); ++pi) {
-            const auto &payload = sc.payloads[pi];
-            int totalPkts = sc.calcPacketCount(payload);
-            replyDetail += QString("<br><font color='blue'><b>负载%1 (%2字节 → %3包)</b></font><br>")
-                           .arg(pi + 1).arg(payload.size()).arg(totalPkts);
-
-            // 预览前2包
-            int showCount = qMin(totalPkts, 2);
-            for (int pktIdx = 0; pktIdx < showCount; ++pktIdx) {
-                int start = pktIdx * chunkSz;
-                int len = qMin(chunkSz, payload.size() - start);
-                QByteArray chunk = payload.mid(start, len);
-                QByteArray pktFrame = sc.buildPacket(pktIdx, totalPkts, chunk, 0);
-                replyDetail += QString("<font color='green'>  包%1 (%2字节负载):</font><br>")
-                               .arg(pktIdx).arg(len);
-                replyDetail += buildFrameDetail(pktFrame, sc.headerParams, sc.dataParams);
-                replyDetail += "<br>";
-            }
-            if (totalPkts > 2)
-                replyDetail += QString("<font color='gray'>  ... (共%1包, 省略%2包)</font><br>")
-                               .arg(totalPkts).arg(totalPkts - 2);
+        int total = mps.size();
+        replyDetail += QString("<br><b>多包配置: 共%1包, 间隔%2ms</b><br>")
+                       .arg(total).arg(m_proto.replyConfig.multiPacketIntervalMs);
+        // 预览前3包
+        int showCount = qMin(total, 3);
+        for (int i = 0; i < showCount; ++i) {
+            const auto &mp = mps[i];
+            QByteArray pktFrame = mp.buildFrame(0, i, total);
+            QString name = mp.name.isEmpty() ? QString("包%1").arg(i + 1) : mp.name;
+            replyDetail += QString("<font color='blue'><b>%1 (%2字节):</b></font><br>")
+                           .arg(name).arg(pktFrame.size());
+            replyDetail += buildFrameDetail(pktFrame, mp.headerParams, mp.dataParams);
+            replyDetail += "<br>";
         }
+        if (total > 3)
+            replyDetail += QString("<font color='gray'>... (共%1包, 省略%2包)</font><br>")
+                           .arg(total).arg(total - 3);
     }
     replyDetail += "</pre>";
     m_replyPreviewLabel->setText(replyDetail);

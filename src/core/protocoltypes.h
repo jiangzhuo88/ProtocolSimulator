@@ -135,32 +135,21 @@ struct ProtocolParam {
     static MatchMode stringToMatchMode(const QString &s);
 };
 
-// 分包配置(模板+负载+循环)
-struct PacketSplitConfig {
-    bool enabled;                          // 是否启用分包下发
-    QVector<ProtocolParam> headerParams;   // 包模板帧头参数(可设PacketIndex/PacketSize/TotalPackets)
-    QVector<ProtocolParam> dataParams;     // 包模板数据区参数(其中一个可标记为负载)
-    int payloadFieldIndex;                 // 负载数据字段在dataParams中的索引(-1=无负载字段)
-    int chunkSize;                         // 每包负载字节数(0=用负载字段userLength)
-    int intervalMs;                        // 包间发送间隔(ms)
-    bool cycleEnabled;                     // 是否多负载循环
-    int cycleIntervalMs;                   // 循环间隔(一轮发完到下一轮,ms)
-    QVector<QByteArray> payloads;          // 多个负载数据(如多张图片)
+// 多包项(每包独立配置字段; MultiPacket回复模式使用)
+// 每个包有自己的帧头/数据区参数; 字段可设动态类型=PacketIndex(包序号)/TotalPackets(总包数)/PacketSize(本包字节数)
+// 发送时按列表顺序逐包发送, 动态字段自动填充, 非动态字段用默认值
+struct MultiPacketItem {
+    QString name;                          // 包名称(列表显示用)
+    QVector<ProtocolParam> headerParams;   // 包帧头参数
+    QVector<ProtocolParam> dataParams;     // 包数据区参数
+    int delayMs;                           // 本包发送前的延迟(ms, <=0=用ReplyConfig.multiPacketIntervalMs)
 
-    PacketSplitConfig()
-        : enabled(false), payloadFieldIndex(-1)
-        , chunkSize(1024), intervalMs(100)
-        , cycleEnabled(false), cycleIntervalMs(1000) {}
+    MultiPacketItem() : delayMs(0) {}
 
     QJsonObject toJson() const;
     void fromJson(const QJsonObject &obj);
-    // 构建第packetIndex个分包(基于chunk负载数据)
-    QByteArray buildPacket(int packetIndex, int totalPackets,
-                           const QByteArray &chunk, quint64 seq) const;
-    // 计算给定负载的分包数
-    int calcPacketCount(const QByteArray &payload) const;
-    // 获取每包负载大小
-    int effectiveChunkSize() const;
+    // 构建本包帧; packetIndex/totalPackets用于动态字段自动填充
+    QByteArray buildFrame(quint64 seq, int packetIndex, int totalPackets) const;
 };
 
 // 回复配置
@@ -169,9 +158,12 @@ struct ReplyConfig {
     int customIntervalMs;                   // 自定义周期(毫秒)
     QVector<ProtocolParam> headerParams;    // 回复帧头参数(发送区)
     QVector<ProtocolParam> dataParams;      // 回复数据区参数(发送区)
-    PacketSplitConfig splitConfig;          // 分包配置(发送区帧发送后, 按模板拆分负载下发)
+    QVector<MultiPacketItem> multiPackets;  // 多包列表(MultiPacket模式: 发送区帧后依次发送)
+    int multiPacketIntervalMs;              // 多包默认发送间隔(ms)
+    bool multiPacketCycle;                  // 多包循环(配合回复周期: 周期模式下每轮回到包1重发)
 
-    ReplyConfig() : mode(ReplyMode::None), customIntervalMs(1000) {}
+    ReplyConfig() : mode(ReplyMode::None), customIntervalMs(1000)
+        , multiPacketIntervalMs(100), multiPacketCycle(false) {}
 
     QJsonObject toJson() const;
     void fromJson(const QJsonObject &obj);

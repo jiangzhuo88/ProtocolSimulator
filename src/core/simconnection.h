@@ -43,13 +43,9 @@ private:
     void stopAllPeriodicReplies();
     void stopPeriodicReplyByName(const QString &name);
 
-    // 分包下发: 拆分负载→逐包构建→间隔发送→多负载循环
-    // config: 分包配置(共享指针保活)
-    // payloadIndex: 当前发送的负载索引
-    // packetIndex: 当前负载内的包索引
-    // seq: 当前包序列号
-    void sendSplitPackets(const QSharedPointer<PacketSplitConfig> config,
-                          int payloadIndex, int packetIndex, quint64 seq);
+    // 多包下发: 按列表顺序逐包构建→间隔发送(发完最后一包即停; 循环由回复周期驱动)
+    void sendMultiPackets(const QSharedPointer<QVector<MultiPacketItem>> packets,
+                          int startIndex, quint64 seq, int intervalMs);
 };
 
 #endif // SIMCONNECTION_H
