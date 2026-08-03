@@ -21,6 +21,7 @@
 #include <QFileDialog>
 #include <QFile>
 #include <QFileInfo>
+#include <QMessageBox>
 #include "collapsiblegroupbox.h"
 
 // ================== 数组编辑对话框(内部类, 无需Q_OBJECT) ==================
@@ -791,12 +792,19 @@ ProtocolParam ProtocolEditDialog::readParamRow(QTableWidget *table, int row, boo
     auto arraySpin = qobject_cast<QSpinBox*>(table->cellWidget(row, 3));
     if (arraySpin) param.arrayCount = arraySpin->value();
 
-    // 默认值列: 数组时是按钮(存arrayData), 单值时是文本item
+    // 默认值列: 数组时是按钮(存arrayData), 单值时是容器(QLineEdit+文件按钮)
     auto defBtn = qobject_cast<QPushButton*>(table->cellWidget(row, 4));
     if (defBtn) {
         param.defaultValue = defBtn->property("arrayData").toString();
     } else {
-        param.defaultValue = table->item(row, 4) ? table->item(row, 4)->text() : "";
+        // 单值容器: 找里面的QLineEdit
+        auto container = qobject_cast<QWidget*>(table->cellWidget(row, 4));
+        if (container) {
+            auto edit = container->findChild<QLineEdit*>();
+            param.defaultValue = edit ? edit->text() : "";
+        } else {
+            param.defaultValue = table->item(row, 4) ? table->item(row, 4)->text() : "";
+        }
     }
 
     auto dynCombo = qobject_cast<QComboBox*>(table->cellWidget(row, 5));
@@ -878,15 +886,50 @@ void ProtocolEditDialog::setupDefaultValueCell(QTableWidget *table, int row, int
             editArrayValues(table, row);
         });
     } else {
-        // 单值: 用文本item
-        auto item = table->item(row, 4);
-        if (!item) {
-            item = new QTableWidgetItem(defaultValue);
-            table->setItem(row, 4, item);
-        } else {
-            item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsEditable | Qt::ItemIsSelectable);
-            item->setText(defaultValue);
-        }
+        // 单值: 用容器(QLineEdit + 文件加载按钮), 支持大块数据(如8000字节负载)
+        QWidget *old = table->cellWidget(row, 4);
+        if (old) { table->removeCellWidget(row, 4); delete old; }
+
+        auto container = new QWidget;
+        auto lay = new QHBoxLayout(container);
+        lay->setContentsMargins(2, 0, 2, 0);
+        lay->setSpacing(2);
+        auto edit = new QLineEdit;
+        edit->setText(defaultValue);
+        edit->setPlaceholderText("Hex(如 41542E)或文本; 大数据点右侧按钮");
+        lay->addWidget(edit);
+        auto btnFile = new QPushButton("文件");
+        btnFile->setToolTip("从文件加载二进制数据(按Hex填充)\n加载后按钮会显示已加载字节数");
+        btnFile->setMaximumWidth(80);
+        lay->addWidget(btnFile);
+        table->setCellWidget(row, 4, container);
+        if (!table->item(row, 4)) table->setItem(row, 4, new QTableWidgetItem(""));
+        table->item(row, 4)->setFlags(Qt::NoItemFlags);
+
+        connect(edit, &QLineEdit::textChanged, this, &ProtocolEditDialog::onParamChanged);
+        connect(btnFile, &QPushButton::clicked, this, [this, edit, btnFile]() {
+            QString path = QFileDialog::getOpenFileName(this, "选择数据文件", QString(),
+                                                        "所有文件(*.*);;二进制(*.bin *.dat);;图片(*.png *.jpg *.bmp)");
+            if (path.isEmpty()) return;
+            QFile f(path);
+            if (!f.open(QIODevice::ReadOnly)) {
+                QMessageBox::warning(this, "加载失败",
+                                     QString("无法打开文件:\n%1\n\n请检查文件是否存在或被占用。").arg(path));
+                return;
+            }
+            QByteArray data = f.readAll();
+            f.close();
+            if (data.isEmpty()) {
+                QMessageBox::warning(this, "加载失败",
+                                     QString("文件为空:\n%1\n\n不会用0填充, 请选择有效数据文件。").arg(path));
+                return;
+            }
+            edit->setText(QString::fromLatin1(data.toHex(' ')));
+            QString tip = QString("已加载: %1 (%2字节)").arg(QFileInfo(path).fileName()).arg(data.size());
+            edit->setToolTip(tip);
+            btnFile->setText(QString("文件(%1B)").arg(data.size()));
+            btnFile->setToolTip(tip + "\n点击可重新加载其他文件");
+        });
     }
 }
 
@@ -1238,6 +1281,30 @@ void ProtocolEditDialog::onMpDataTableContextMenu(const QPoint &pos)
 void ProtocolEditDialog::onPreviewTimer()
 {
     updatePreview();
+}
+
+// 检测Hex/Bytes类型参数: defaultValue为空但占用字节>0时, 会被memset(0)填充发出
+// 这种"无内容却发了0字节"在分包负载场景下是异常, 应提示用户从文件加载真实数据
+QString ProtocolEditDialog::zeroFillWarnHtml(const ProtocolParam &p, int byteCount)
+{
+    // 只关心原始字节类型(Hex/Bytes/String/StringUtf8)且非动态、非随机、非数组
+    if (p.dynamicType != DynamicType::None) return QString();
+    if (p.isRandom) return QString();
+    if (p.arrayCount > 1) return QString();
+    if (byteCount <= 0) return QString();
+
+    bool rawByte = (p.type == ParamType::Hex || p.type == ParamType::Bytes
+                    || p.type == ParamType::String || p.type == ParamType::StringUtf8);
+    if (!rawByte) return QString();
+
+    // defaultValue去除空格/0x前缀后为空 → 实际内容为空, 会用0填充
+    QString s = p.defaultValue.trimmed();
+    if (s.startsWith("0x", Qt::CaseInsensitive)) s = s.mid(2);
+    s.remove(' ').remove('\n').remove('\t');
+    if (!s.isEmpty()) return QString();
+
+    return QString("<font color='red'> [警告:未加载数据,%1字节将用0填充,请点\"文件\"按钮加载真实数据!]</font>")
+           .arg(byteCount);
 }
 
 bool ProtocolEditDialog::eventFilter(QObject *obj, QEvent *event)
@@ -1593,10 +1660,11 @@ void ProtocolEditDialog::updatePreview()
             }
         }
 
-        detail += QString("<span%1>  偏移:%2  %3 (%4)  %5字节  值:%6%7%8</span><br>")
+        detail += QString("<span%1>  偏移:%2  %3 (%4)  %5字节  值:%6%7%8%9</span><br>")
                   .arg(bgStyle).arg(offset).arg(p.name)
                   .arg(ProtocolParam::typeToString(p.type))
-                  .arg(sz).arg(fieldHex).arg(arrayInfo).arg(matchInfo);
+                  .arg(sz).arg(fieldHex).arg(arrayInfo).arg(matchInfo)
+                  .arg(zeroFillWarnHtml(p, sz));
         offset += sz;
     }
     detail += "<b>数据区:</b><br>";
@@ -1627,10 +1695,11 @@ void ProtocolEditDialog::updatePreview()
             }
         }
 
-        detail += QString("<span%1>  偏移:%2  %3 (%4)  %5字节  值:%6%7%8</span><br>")
+        detail += QString("<span%1>  偏移:%2  %3 (%4)  %5字节  值:%6%7%8%9</span><br>")
                   .arg(bgStyle).arg(offset).arg(p.name)
                   .arg(ProtocolParam::typeToString(p.type))
-                  .arg(sz).arg(fieldHex).arg(arrayInfo).arg(matchInfo);
+                  .arg(sz).arg(fieldHex).arg(arrayInfo).arg(matchInfo)
+                  .arg(zeroFillWarnHtml(p, sz));
         offset += sz;
     }
     detail += QString("<br><b>完整帧 (%1字节):</b> %2").arg(frame.size()).arg(hex);
@@ -1670,9 +1739,10 @@ void ProtocolEditDialog::updatePreview()
                 }
             }
 
-            s += QString("<span%1>  偏移:%2  %3  值:%4%5%6</span><br>")
+            s += QString("<span%1>  偏移:%2  %3  值:%4%5%6%7</span><br>")
                  .arg(bgStyle).arg(roffset).arg(p.name)
-                 .arg(QString::fromLatin1(fieldData.toHex(' '))).arg(arrayInfo).arg(randInfo);
+                 .arg(QString::fromLatin1(fieldData.toHex(' '))).arg(arrayInfo).arg(randInfo)
+                 .arg(ProtocolEditDialog::zeroFillWarnHtml(p, sz));
             roffset += sz;
         }
         s += "<b>数据区:</b><br>";
@@ -1698,9 +1768,10 @@ void ProtocolEditDialog::updatePreview()
                 }
             }
 
-            s += QString("<span%1>  偏移:%2  %3  值:%4%5%6</span><br>")
+            s += QString("<span%1>  偏移:%2  %3  值:%4%5%6%7</span><br>")
                  .arg(bgStyle).arg(roffset).arg(p.name)
-                 .arg(QString::fromLatin1(fieldData.toHex(' '))).arg(arrayInfo).arg(randInfo);
+                 .arg(QString::fromLatin1(fieldData.toHex(' '))).arg(arrayInfo).arg(randInfo)
+                 .arg(ProtocolEditDialog::zeroFillWarnHtml(p, sz));
             roffset += sz;
         }
         s += QString("<b>完整帧 (%1字节):</b> %2").arg(frame.size())

@@ -83,6 +83,9 @@ private:
     void saveCurrentMultiPacket();
     void refreshMultiPacketList();
 
+    // 检测Hex/Bytes参数"空值+userLength>0"会被0填充的情况; 返回非空HTML警告串(红色), 否则返回空串
+    static QString zeroFillWarnHtml(const ProtocolParam &p, int byteCount);
+
     // 复制粘贴辅助函数
     void copyTableSelection(QTableWidget *table, bool isReplyTable);
     void copyTableAll(QTableWidget *table, bool isReplyTable);
