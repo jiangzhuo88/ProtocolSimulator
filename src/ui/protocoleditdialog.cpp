@@ -22,6 +22,9 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QMessageBox>
+#include <QLabel>
+#include <QPlainTextEdit>
+#include <QFont>
 #include "collapsiblegroupbox.h"
 
 // ================== 数组编辑对话框(内部类, 无需Q_OBJECT) ==================
@@ -110,6 +113,190 @@ private:
     QLineEdit *m_fillEdit;
     QLineEdit *m_seqStart;
     QLineEdit *m_seqStep;
+};
+
+// ================== 大数据编辑对话框(内部类, 无需Q_OBJECT) ==================
+// 用于Hex/Bytes类型参数的大块数据编辑: 显示当前已有hex, 支持从文件加载并选择字节范围
+// 典型场景: 分包负载每包8000字节, 从大文件中按 [起始, 结束) 截取本包数据
+class LargeDataEditDialog : public QDialog
+{
+public:
+    LargeDataEditDialog(const QByteArray &currentData, QWidget *parent = nullptr)
+        : QDialog(parent), m_data(currentData)
+    {
+        setWindowTitle("大数据编辑 (文件加载/字节范围选择)");
+        resize(720, 600);
+        auto lay = new QVBoxLayout(this);
+
+        // 当前Hex内容(hexdump格式: 偏移 | 16字节Hex | ASCII)
+        lay->addWidget(new QLabel("当前数据 (偏移 | Hex字节 | ASCII):"));
+        m_hexView = new QPlainTextEdit;
+        m_hexView->setReadOnly(true);
+        m_hexView->setFont(QFont("Monospace"));
+        m_hexView->setLineWrapMode(QPlainTextEdit::NoWrap);
+        lay->addWidget(m_hexView);
+
+        // 文件加载按钮 + 文件信息
+        auto fileLay = new QHBoxLayout;
+        auto btnFile = new QPushButton("选择文件...");
+        btnFile->setToolTip("从文件加载二进制数据, 加载后可在下方选择字节范围");
+        m_fileLabel = new QLabel("未加载文件 (显示当前已有数据)");
+        fileLay->addWidget(btnFile);
+        fileLay->addWidget(m_fileLabel, 1);
+        lay->addLayout(fileLay);
+
+        // 字节范围选择
+        auto rangeLay = new QHBoxLayout;
+        rangeLay->addWidget(new QLabel("起始字节:"));
+        m_startSpin = new QSpinBox;
+        m_startSpin->setRange(0, 0);
+        m_startSpin->setToolTip("选中范围的起始字节偏移(含此字节, 0-based)");
+        rangeLay->addWidget(m_startSpin);
+        rangeLay->addWidget(new QLabel("结束字节:"));
+        m_endSpin = new QSpinBox;
+        m_endSpin->setRange(0, 0);
+        m_endSpin->setToolTip("选中范围的结束字节偏移(不含此字节, 即区间 [start, end))");
+        rangeLay->addWidget(m_endSpin);
+        auto btnAll = new QPushButton("全选");
+        btnAll->setToolTip("选中整个数据范围 [0, 总大小)");
+        rangeLay->addWidget(btnAll);
+        rangeLay->addStretch();
+        lay->addLayout(rangeLay);
+
+        // 选中范围预览
+        lay->addWidget(new QLabel("选中范围预览:"));
+        m_rangePreview = new QPlainTextEdit;
+        m_rangePreview->setReadOnly(true);
+        m_rangePreview->setFont(QFont("Monospace"));
+        m_rangePreview->setLineWrapMode(QPlainTextEdit::NoWrap);
+        m_rangePreview->setMaximumBlockCount(2000);
+        lay->addWidget(m_rangePreview);
+
+        // 统计信息
+        m_statLabel = new QLabel;
+        lay->addWidget(m_statLabel);
+
+        // 按钮
+        auto btnLay = new QHBoxLayout;
+        btnLay->addStretch();
+        auto ok = new QPushButton("确定");
+        auto cancel = new QPushButton("取消");
+        btnLay->addWidget(ok);
+        btnLay->addWidget(cancel);
+        lay->addLayout(btnLay);
+
+        // 初始化显示
+        refreshHexView();
+        m_startSpin->setRange(0, m_data.size());
+        m_endSpin->setRange(0, m_data.size());
+        m_startSpin->setValue(0);
+        m_endSpin->setValue(m_data.size());
+        updateRangePreview();
+
+        // 信号连接(lambda, 无需Q_OBJECT)
+        connect(btnFile, &QPushButton::clicked, this, [this]() { onSelectFile(); });
+        connect(m_startSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](int) { updateRangePreview(); });
+        connect(m_endSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](int) { updateRangePreview(); });
+        connect(btnAll, &QPushButton::clicked, this, [this]() {
+            m_startSpin->setValue(0);
+            m_endSpin->setValue(m_data.size());
+        });
+        connect(ok, &QPushButton::clicked, this, &QDialog::accept);
+        connect(cancel, &QPushButton::clicked, this, &QDialog::reject);
+    }
+
+    // 返回选中范围的Hex字符串(空格分隔), 供回填QLineEdit
+    QString selectedHex() const {
+        int start = qMin(m_startSpin->value(), m_endSpin->value());
+        int end = qMax(m_startSpin->value(), m_endSpin->value());
+        QByteArray sub = m_data.mid(start, end - start);
+        return QString::fromLatin1(sub.toHex(' '));
+    }
+
+    // 返回选中字节数
+    int selectedSize() const {
+        return qAbs(m_endSpin->value() - m_startSpin->value());
+    }
+
+private:
+    QByteArray m_data;
+    QPlainTextEdit *m_hexView;
+    QLabel *m_fileLabel;
+    QSpinBox *m_startSpin;
+    QSpinBox *m_endSpin;
+    QPlainTextEdit *m_rangePreview;
+    QLabel *m_statLabel;
+
+    void onSelectFile() {
+        QString path = QFileDialog::getOpenFileName(this, "选择数据文件", QString(),
+                                                    "所有文件(*.*);;二进制(*.bin *.dat);;图片(*.png *.jpg *.bmp)");
+        if (path.isEmpty()) return;
+        QFile f(path);
+        if (!f.open(QIODevice::ReadOnly)) {
+            QMessageBox::warning(this, "加载失败",
+                                 QString("无法打开文件:\n%1\n\n请检查文件是否存在或被占用。").arg(path));
+            return;
+        }
+        QByteArray data = f.readAll();
+        f.close();
+        if (data.isEmpty()) {
+            QMessageBox::warning(this, "加载失败",
+                                 QString("文件为空:\n%1\n\n不会用0填充, 请选择有效数据文件。").arg(path));
+            return;
+        }
+        m_data = data;
+        m_fileLabel->setText(QString("已加载: %1 (总大小 %2字节)").arg(QFileInfo(path).fileName()).arg(data.size()));
+        refreshHexView();
+        m_startSpin->setRange(0, m_data.size());
+        m_endSpin->setRange(0, m_data.size());
+        m_startSpin->setValue(0);
+        m_endSpin->setValue(m_data.size());
+        updateRangePreview();
+    }
+
+    void refreshHexView() {
+        m_hexView->setPlainText(formatHexDump(m_data));
+    }
+
+    void updateRangePreview() {
+        int start = qMin(m_startSpin->value(), m_endSpin->value());
+        int end = qMax(m_startSpin->value(), m_endSpin->value());
+        QByteArray sub = m_data.mid(start, end - start);
+        m_rangePreview->setPlainText(formatHexDump(sub));
+        m_statLabel->setText(QString("数据总大小: %1字节 | 选中范围: [%2, %3) | 将填充字节数: %4")
+                             .arg(m_data.size()).arg(start).arg(end).arg(sub.size()));
+    }
+
+    // hexdump格式: "0000: 41 54 2E ... |AT.|"
+    // 超过4KB只显示前4KB避免卡顿, 末尾标注总字节数
+    static QString formatHexDump(const QByteArray &data) {
+        const int maxShow = 4096;
+        int showBytes = qMin(data.size(), maxShow);
+        QString result;
+        result.reserve(showBytes * 4);
+        for (int i = 0; i < showBytes; i += 16) {
+            QString line = QString("%1: ").arg(i, 4, 16, QChar('0')).toUpper();
+            for (int j = 0; j < 16; ++j) {
+                if (i + j < showBytes)
+                    line += QString("%1 ").arg((quint8)data[i+j], 2, 16, QChar('0')).toUpper();
+                else
+                    line += "   ";
+            }
+            line += "|";
+            for (int j = 0; j < 16; ++j) {
+                if (i + j < showBytes) {
+                    char c = data[i+j];
+                    line += (c >= 32 && c < 127) ? QChar::fromLatin1(c) : QChar('.');
+                }
+            }
+            line += "|";
+            result += line;
+            result += "\n";
+        }
+        if (data.size() > maxShow)
+            result += QString("... (共 %1 字节, 仅显示前 %2 字节)").arg(data.size()).arg(maxShow);
+        return result;
+    }
 };
 
 ProtocolEditDialog::ProtocolEditDialog(ProtocolConfig &proto, QVector<ProtocolConfig> *allProtocols, QWidget *parent)
@@ -899,7 +1086,7 @@ void ProtocolEditDialog::setupDefaultValueCell(QTableWidget *table, int row, int
         edit->setPlaceholderText("Hex(如 41542E)或文本; 大数据点右侧按钮");
         lay->addWidget(edit);
         auto btnFile = new QPushButton("文件");
-        btnFile->setToolTip("从文件加载二进制数据(按Hex填充)\n加载后按钮会显示已加载字节数");
+        btnFile->setToolTip("打开大数据编辑对话框\n- 显示当前已有hex内容\n- 可从文件加载二进制数据\n- 可选择字节范围[起始,结束)\n- 确定后按选中范围回填Hex");
         btnFile->setMaximumWidth(80);
         lay->addWidget(btnFile);
         table->setCellWidget(row, 4, container);
@@ -908,27 +1095,28 @@ void ProtocolEditDialog::setupDefaultValueCell(QTableWidget *table, int row, int
 
         connect(edit, &QLineEdit::textChanged, this, &ProtocolEditDialog::onParamChanged);
         connect(btnFile, &QPushButton::clicked, this, [this, edit, btnFile]() {
-            QString path = QFileDialog::getOpenFileName(this, "选择数据文件", QString(),
-                                                        "所有文件(*.*);;二进制(*.bin *.dat);;图片(*.png *.jpg *.bmp)");
-            if (path.isEmpty()) return;
-            QFile f(path);
-            if (!f.open(QIODevice::ReadOnly)) {
-                QMessageBox::warning(this, "加载失败",
-                                     QString("无法打开文件:\n%1\n\n请检查文件是否存在或被占用。").arg(path));
-                return;
+            // 解析QLineEdit中当前的hex内容作为对话框初始数据
+            QString curHex = edit->text();
+            curHex.remove(' ').remove('\n').remove('\t');
+            QByteArray curData;
+            if (curHex.startsWith("0x", Qt::CaseInsensitive)) curHex = curHex.mid(2);
+            if (!curHex.isEmpty()) {
+                curData = QByteArray::fromHex(curHex.toLatin1());
+                // 若hex解析为空(可能用户填的是文本), 回退为原始文本字节
+                if (curData.isEmpty() && !edit->text().trimmed().isEmpty())
+                    curData = edit->text().toLatin1();
             }
-            QByteArray data = f.readAll();
-            f.close();
-            if (data.isEmpty()) {
-                QMessageBox::warning(this, "加载失败",
-                                     QString("文件为空:\n%1\n\n不会用0填充, 请选择有效数据文件。").arg(path));
-                return;
+            // 弹出大数据编辑对话框: 显示当前hex + 可选文件 + 字节范围选择
+            LargeDataEditDialog dlg(curData, this);
+            if (dlg.exec() == QDialog::Accepted) {
+                QString hex = dlg.selectedHex();
+                int sz = dlg.selectedSize();
+                edit->setText(hex);
+                QString tip = QString("已加载范围: %1字节").arg(sz);
+                edit->setToolTip(tip);
+                btnFile->setText(QString("文件(%1B)").arg(sz));
+                btnFile->setToolTip(tip + "\n点击重新打开编辑对话框");
             }
-            edit->setText(QString::fromLatin1(data.toHex(' ')));
-            QString tip = QString("已加载: %1 (%2字节)").arg(QFileInfo(path).fileName()).arg(data.size());
-            edit->setToolTip(tip);
-            btnFile->setText(QString("文件(%1B)").arg(data.size()));
-            btnFile->setToolTip(tip + "\n点击可重新加载其他文件");
         });
     }
 }
