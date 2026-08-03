@@ -10,7 +10,7 @@
 #include <QDateTime>
 #include <QApplication>
 #include <QDir>
-
+#include "ZTextEdit.h"
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent), m_server(nullptr), m_currentSceneIndex(-1)
 {
@@ -93,7 +93,7 @@ void MainWindow::setupUi()
     // 日志区
     auto logGroup = new QGroupBox("日志");
     auto logLayout = new QVBoxLayout(logGroup);
-    m_logEdit = new QTextEdit;
+    m_logEdit = new ZTextEdit;
     m_logEdit->setReadOnly(true);
     m_logEdit->setMaximumHeight(200);
     logLayout->addWidget(m_logEdit);
@@ -203,7 +203,8 @@ void MainWindow::onAddProtocol()
     proto.name = "新协议";
     auto &protocols = m_config.scenes()[m_currentSceneIndex].protocols;
 
-    ProtocolEditDialog dlg(proto, &protocols, this);
+//    ProtocolEditDialog dlg(proto, this);
+    ProtocolEditDialog dlg(proto, &protocols,this);
     if (dlg.exec() == QDialog::Accepted) {
         proto = dlg.getProtocol();
         m_config.scenes()[m_currentSceneIndex].protocols.append(proto);
@@ -222,9 +223,11 @@ void MainWindow::onEditProtocol()
         return;
     }
     ProtocolConfig proto = m_config.scenes()[m_currentSceneIndex].protocols[row];
+
     auto &protocols = m_config.scenes()[m_currentSceneIndex].protocols;
 
-    ProtocolEditDialog dlg(proto, &protocols, this);
+//    ProtocolEditDialog dlg(proto, this);
+    ProtocolEditDialog dlg(proto, &protocols,this);
     if (dlg.exec() == QDialog::Accepted) {
         proto = dlg.getProtocol();
         m_config.scenes()[m_currentSceneIndex].protocols[row] = proto;
@@ -239,9 +242,11 @@ void MainWindow::onProtocolDoubleClicked(int row, int)
 {
     if (m_currentSceneIndex < 0 || row < 0) return;
     ProtocolConfig proto = m_config.scenes()[m_currentSceneIndex].protocols[row];
+
     auto &protocols = m_config.scenes()[m_currentSceneIndex].protocols;
 
-    ProtocolEditDialog dlg(proto, &protocols, this);
+//    ProtocolEditDialog dlg(proto, this);
+    ProtocolEditDialog dlg(proto, &protocols,this);
     if (dlg.exec() == QDialog::Accepted) {
         proto = dlg.getProtocol();
         m_config.scenes()[m_currentSceneIndex].protocols[row] = proto;

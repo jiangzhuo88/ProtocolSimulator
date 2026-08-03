@@ -41,10 +41,9 @@ void SimConnection::onReadyRead()
 
 void SimConnection::tryMatch()
 {
-    // 遍历所有有效协议，尝试匹配(多条协议可能同时匹配，都需回复)
+    // 遍历所有有效协议，尝试匹配
     bool anyMatched = false;
     int maxMatchedSize = 0;
-
     for (int i = 0; i < m_protocols.size(); ++i) {
         const ProtocolConfig &proto = m_protocols[i];
         if (proto.isActivePush) continue; // 主动上报协议不参与匹配
@@ -61,8 +60,6 @@ void SimConnection::tryMatch()
             dataSize += p.byteSize();
 
         int totalSize = headerSize + dataSize;
-        if (proto.fixedFrameLength > 0)
-            totalSize = proto.fixedFrameLength;
         if (m_rxBuffer.size() < totalSize) continue;
 
         // 提取每个字段的字节进行匹配
@@ -70,7 +67,7 @@ void SimConnection::tryMatch()
         int offset = 0;
 
         // 匹配帧头参数
-        for (const auto &p : proto.headerParams) {
+        for (const ProtocolParam &p : proto.headerParams) {
             int sz = p.byteSize();
             QByteArray fieldData = m_rxBuffer.mid(offset, sz);
             if (p.matchEnabled && !p.match(fieldData)) {
@@ -97,20 +94,15 @@ void SimConnection::tryMatch()
             QString addr = m_socket->peerAddress().toString() + ":" + QString::number(m_socket->peerPort());
             emit logMessage(QString("[匹配] 协议 '%1' 匹配成功").arg(proto.name));
 
-            // 如果该协议匹配时需要停止所有周期回复
-            if (proto.stopAllPeriodicOnMatch) {
-                emit logMessage(QString("[停止] 协议 '%1' 触发停止指令，停止所有周期回复").arg(proto.name));
-                stopAllPeriodicReplies();
-            }
-
-            // 停止指定协议的周期回复
-            if (!proto.stopPeriodicProtocolNames.isEmpty()) {
-                for (const auto &name : proto.stopPeriodicProtocolNames) {
-                    emit logMessage(QString("[停止] 协议 '%1' 触发停止指令，停止协议 '%2' 的周期回复").arg(proto.name).arg(name));
+            if(!proto.stopPeriodicProtocolNames.isEmpty())
+            {
+                for(const QString &name : proto.stopPeriodicProtocolNames)
+                {
+                    emit logMessage(QString("[停止] 协议'%1'触发停止指令，停止协议'%2'的周期回复").arg(proto.name).arg(name));
                     stopPeriodicReplyByName(name);
                 }
             }
-
+            anyMatched = true;
             // 执行回复
             const ReplyConfig &reply = proto.replyConfig;
             if (reply.mode == ReplyMode::Once) {
@@ -126,19 +118,28 @@ void SimConnection::tryMatch()
                 startPeriodicReply(i, reply.customIntervalMs);
             }
 
-            anyMatched = true;
-            if (totalSize > maxMatchedSize)
+//            // 消费已匹配的数据
+//            m_rxBuffer.remove(0, totalSize);
+//            // 继续尝试匹配剩余数据
+//            if (!m_rxBuffer.isEmpty())
+//                tryMatch();
+//            return;
+
+            if(totalSize > maxMatchedSize)
+            {
                 maxMatchedSize = totalSize;
+            }
         }
     }
-
-    if (anyMatched) {
-        // 消费已匹配的数据(取最大匹配长度)
-        m_rxBuffer.remove(0, maxMatchedSize);
-        // 继续尝试匹配剩余数据
-        if (!m_rxBuffer.isEmpty())
+    if(anyMatched)
+    {
+        m_rxBuffer.remove(0,maxMatchedSize);
+        if(!m_rxBuffer.isEmpty())
+        {
             tryMatch();
+        }
     }
+    return;
 }
 
 void SimConnection::startPeriodicReply(int protoIndex, int intervalMs)
@@ -160,6 +161,7 @@ void SimConnection::startPeriodicReply(int protoIndex, int intervalMs)
 
     emit logMessage(QString("[周期回复] 协议 '%1' 开始周期回复, 间隔%2ms")
                     .arg(m_protocols[protoIndex].name).arg(intervalMs));
+    return;
 }
 
 void SimConnection::onPeriodicReply()
@@ -171,11 +173,12 @@ void SimConnection::onPeriodicReply()
 
     const ProtocolConfig &proto = m_protocols[protoIndex];
     QByteArray replyData = proto.buildReplyFrame(m_seqNumber++);
-    m_socket->write(replyData);
+    qint64 result = m_socket->write(replyData);
 
     QString addr = m_socket->peerAddress().toString() + ":" + QString::number(m_socket->peerPort());
     emit dataSent(replyData, addr);
-    emit logMessage(QString("[发] %1: %2").arg(addr).arg(QString::fromLatin1(replyData.toHex(' '))));
+//    emit logMessage(QString("[发] %1: %2").arg(addr).arg(QString::fromLatin1(replyData.toHex(' '))));
+    emit logMessage(QString("[发] %1: %2").arg(addr).arg(proto.name));
 }
 
 void SimConnection::stopAllPeriodicReplies()
@@ -191,20 +194,22 @@ void SimConnection::stopAllPeriodicReplies()
 
 void SimConnection::stopPeriodicReplyByName(const QString &name)
 {
-    // 查找协议名称对应的index
     int protoIndex = -1;
-    for (int i = 0; i < m_protocols.size(); ++i) {
-        if (m_protocols[i].name == name) {
+    for(int i = 0;i < m_protocols.size();++i)
+    {
+        if(m_protocols[i].name == name)
+        {
             protoIndex = i;
             break;
         }
     }
-    if (protoIndex < 0) return;
-
-    // 停止对应的定时器
-    for (int i = m_periodicTimers.size() - 1; i >= 0; --i) {
-        if (m_periodicTimers[i].protocolIndex == protoIndex) {
-            if (m_periodicTimers[i].timer) {
+    if(protoIndex < 0) return;
+    for(int i = m_periodicTimers.size() - 1;i >= 0;--i)
+    {
+        if(m_periodicTimers[i].protocolIndex == protoIndex)
+        {
+            if(m_periodicTimers[i].timer)
+            {
                 m_periodicTimers[i].timer->stop();
                 delete m_periodicTimers[i].timer;
             }

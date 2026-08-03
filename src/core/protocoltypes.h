@@ -73,9 +73,8 @@ struct ProtocolParam {
     MatchMode matchMode;       // 匹配模式
     QString matchValue;        // 匹配值
     QString matchValue2;       // 第二匹配值(范围匹配时的max, 掩码匹配时的expected)
-
-    int userLength;            // 用户显式指定的长度(仅Hex/Bytes/String类型用,0=自动推导)
-    int arrayCount;            // 数组元素个数(1=单个值, >1=同类型数组, 如1600个Int16)
+    int userLength;            // 用户显式指定的长度
+    int arrayCount;            // 数组元素个数（1=单个值，>1=同类型数组）
 
     bool isRandom;             // 是否随机值(用于回复参数)
     QString randomMin;         // 随机最小值
@@ -145,11 +144,9 @@ struct ProtocolConfig {
     ReplyConfig replyConfig;                // 回复配置
     bool isActivePush;                      // 是否主动上报(心跳/状态)
     int pushIntervalMs;                     // 主动上报周期(ms)
-    int fixedFrameLength;                   // 固定帧总长度(0=根据参数自动计算, >0=手动指定)
-    bool stopAllPeriodicOnMatch;            // 匹配成功时停止所有正在运行的周期回复
-    QStringList stopPeriodicProtocolNames;  // 匹配成功时要停止的周期回复协议名称列表
+    QStringList stopPeriodicProtocolNames;  //匹配成功时要停止的周期回复协议
 
-    ProtocolConfig() : isActivePush(false), pushIntervalMs(1000), fixedFrameLength(0), stopAllPeriodicOnMatch(false) {}
+    ProtocolConfig() : isActivePush(false), pushIntervalMs(1000) {}
 
     // 是否有效(主动上报始终有效, 或至少有一个参数启用了匹配)
     bool isValid() const;

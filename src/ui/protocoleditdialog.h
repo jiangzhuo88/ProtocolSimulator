@@ -12,13 +12,15 @@
 #include <QTabWidget>
 #include <QListWidget>
 #include "collapsiblegroupbox.h"
+#include "WheelEventFilter.h"
 #include "../core/protocoltypes.h"
 
 class ProtocolEditDialog : public QDialog
 {
     Q_OBJECT
 public:
-    explicit ProtocolEditDialog(ProtocolConfig &proto, QVector<ProtocolConfig> *allProtocols, QWidget *parent = nullptr);
+//    explicit ProtocolEditDialog(ProtocolConfig &proto, QWidget *parent = nullptr);
+    explicit ProtocolEditDialog(ProtocolConfig &proto,QVector<ProtocolConfig>* allProtocols, QWidget *parent = nullptr);
     ProtocolConfig getProtocol() const;
 
 protected:
@@ -67,17 +69,13 @@ private:
     static QVector<ProtocolParam> paramsFromClipboardData(const QByteArray &data, bool &outIsReplyTable);
 
     ProtocolConfig &m_proto;
-    QVector<ProtocolConfig> *m_allProtocols;
-
+    QVector<ProtocolConfig>* m_allProtocols;
     // 基本信息控件
     QLineEdit *m_nameEdit;
     QLineEdit *m_descEdit;
     QCheckBox *m_activePushCheck;
     QSpinBox *m_pushIntervalSpin;
-    QSpinBox *m_fixedFrameLenSpin;
 
-    // 操作配置Tab
-    QCheckBox *m_stopAllCheck;
     QListWidget *m_stopList;
 
     // 接收协议Tab
@@ -91,11 +89,16 @@ private:
     QTableWidget *m_replyHeaderTable;
     QTableWidget *m_replyDataTable;
 
+    // 分包配置Tab
+    QTabWidget *m_subPackTabWidget;
+    QCheckBox* m_subPackCheckBox;
+
     // 预览
     QLabel *m_previewLabel;
     QLabel *m_replyPreviewLabel;
 
     bool m_loading; // 加载中标志, 防止onParamChanged覆盖数据
+    WheelEventFilter *wheelFilter;
 };
 
 #endif // PROTOCOLEDITDIALOG_H

@@ -5,7 +5,7 @@ TARGET = ProtocolSimulator
 TEMPLATE = app
 
 CONFIG += c++11
-
+DESTDIR = $$PWD/bin/
 SOURCES += \
     src/main.cpp \
     src/core/protocoltypes.cpp \
@@ -15,7 +15,9 @@ SOURCES += \
     src/ui/mainwindow.cpp \
     src/ui/protocoleditdialog.cpp \
     src/ui/scenemanagedialog.cpp \
-    src/ui/collapsiblegroupbox.cpp
+    src/ui/collapsiblegroupbox.cpp \
+    src/ui/WheelEventFilter.cpp \
+    src/core/ZTextEdit.cpp
 
 HEADERS += \
     src/core/protocoltypes.h \
@@ -25,6 +27,8 @@ HEADERS += \
     src/ui/mainwindow.h \
     src/ui/protocoleditdialog.h \
     src/ui/scenemanagedialog.h \
-    src/ui/collapsiblegroupbox.h
+    src/ui/collapsiblegroupbox.h \
+    src/ui/WheelEventFilter.h \
+    src/core/ZTextEdit.h
 
 INCLUDEPATH += src/core src/ui

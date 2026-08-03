@@ -90,7 +90,7 @@ bool ConfigManager::saveScenes(const QString &dir) const
         meta["tcpPort"] = scene.tcpPort;
         QFile sf(scenePath + "/scene.json");
         if (sf.open(QIODevice::WriteOnly)) {
-            sf.write(QJsonDocument(meta).toJson(QJsonDocument::Compact));
+            sf.write(QJsonDocument(meta).toJson());
             sf.close();
         }
 
@@ -108,7 +108,7 @@ bool ConfigManager::saveScenes(const QString &dir) const
             QString protoFile = scenePath + "/" + proto.name + ".json";
             QFile f(protoFile);
             if (f.open(QIODevice::WriteOnly)) {
-                f.write(QJsonDocument(proto.toJson()).toJson(QJsonDocument::Compact));
+                f.write(QJsonDocument(proto.toJson()).toJson());
                 f.close();
             }
         }
@@ -140,7 +140,7 @@ bool ConfigManager::saveScene(const QString &filepath, const SceneConfig &scene)
     QFile f(filepath);
     if (!f.open(QIODevice::WriteOnly)) return false;
     QJsonDocument doc(scene.toJson());
-    f.write(doc.toJson(QJsonDocument::Compact));
+    f.write(doc.toJson());
     f.close();
     return true;
 }
