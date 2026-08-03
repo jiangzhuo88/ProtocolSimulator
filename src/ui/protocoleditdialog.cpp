@@ -1139,7 +1139,7 @@ void ProtocolEditDialog::onMoveMultiPacketUp()
     int row = m_mpList->currentRow();
     if (row <= 0) return;
     saveCurrentMultiPacket();
-    m_proto.replyConfig.multiPackets.swapItemsAt(row, row - 1);
+    qSwap(m_proto.replyConfig.multiPackets[row], m_proto.replyConfig.multiPackets[row - 1]);
     m_mpCurrentIndex = row - 1;
     refreshMultiPacketList();
     m_mpList->setCurrentRow(m_mpCurrentIndex);
@@ -1152,7 +1152,7 @@ void ProtocolEditDialog::onMoveMultiPacketDown()
     int row = m_mpList->currentRow();
     if (row < 0 || row >= m_proto.replyConfig.multiPackets.size() - 1) return;
     saveCurrentMultiPacket();
-    m_proto.replyConfig.multiPackets.swapItemsAt(row, row + 1);
+    qSwap(m_proto.replyConfig.multiPackets[row], m_proto.replyConfig.multiPackets[row + 1]);
     m_mpCurrentIndex = row + 1;
     refreshMultiPacketList();
     m_mpList->setCurrentRow(m_mpCurrentIndex);
