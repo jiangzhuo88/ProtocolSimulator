@@ -183,13 +183,25 @@ void SimConnection::startPeriodicReply(int protoIndex, int intervalMs)
         if (protoIndex < 0 || protoIndex >= m_protocols.size()) return;
         const ProtocolConfig &proto = m_protocols[protoIndex];
         QString addr = m_socket->peerAddress().toString() + ":" + QString::number(m_socket->peerPort());
-        // 多包循环模式: 开启循环且有多包 → 每周期发N个闭环(每包=回复帧+多包帧)
+        // 多包循环模式: 开启循环且有多包 → 每轮发N个闭环(每包=回复帧+多包帧)
+        // 关键: 一轮所有包发完后再开始计时下一轮, 避免上轮未发完下轮又开始导致错包
         // 否则 → 只发发送区回复帧
         if (proto.replyConfig.multiPacketCycle && !proto.replyConfig.multiPackets.isEmpty()) {
+            // 找到本协议的PeriodicReply条目
+            PeriodicReply *pr = nullptr;
+            for (auto &entry : m_periodicTimers)
+                if (entry.protocolIndex == protoIndex) { pr = &entry; break; }
+            // 防重入: 本轮还在发(理论上不会, 因为发前已停定时器), 跳过
+            if (pr && pr->mpRoundInProgress) return;
+            if (pr) {
+                pr->mpRoundInProgress = true;
+                pr->timer->stop();   // 停掉定时器, 等本轮发完再重启计时
+            }
             auto packets = QSharedPointer<QVector<MultiPacketItem>>::create(proto.replyConfig.multiPackets);
             emit logMessage(QString("[多包循环] 协议 '%1' 周期触发, 发送 %2 个闭环包")
                             .arg(proto.name).arg(packets->size()));
-            sendMultiPackets(proto, packets, 0, m_seqNumber, proto.replyConfig.multiPacketIntervalMs);
+            sendMultiPackets(proto, packets, 0, m_seqNumber, proto.replyConfig.multiPacketIntervalMs,
+                             protoIndex, true);
         } else {
             QByteArray replyData = proto.buildReplyFrame(m_seqNumber++);
             m_socket->write(replyData);
@@ -251,25 +263,45 @@ void SimConnection::stopPeriodicReplyByName(const QString &name)
 
 void SimConnection::sendMultiPackets(const ProtocolConfig &proto,
                                      const QSharedPointer<QVector<MultiPacketItem>> packets,
-                                     int startIndex, quint64 seq, int intervalMs)
+                                     int startIndex, quint64 seq, int intervalMs,
+                                     int protoIndex, bool cycleReschedule)
 {
-    if (!packets || startIndex < 0 || startIndex >= packets->size()) return;
-    if (!m_socket || m_socket->state() != QAbstractSocket::ConnectedState) return;
+    // 提前返回时(cycle模式): 恢复标志并重启定时器, 避免循环静默停滞
+    auto abortCycleSafe = [this, protoIndex]() {
+        for (auto &entry : m_periodicTimers) {
+            if (entry.protocolIndex == protoIndex) {
+                entry.mpRoundInProgress = false;
+                if (entry.timer) entry.timer->start();
+                break;
+            }
+        }
+    };
+    if (!packets || startIndex < 0 || startIndex >= packets->size()) {
+        if (cycleReschedule) abortCycleSafe();
+        return;
+    }
+    if (!m_socket || m_socket->state() != QAbstractSocket::ConnectedState) {
+        // socket断开: SimConnection会被deleteLater销毁, 无需重启定时器
+        return;
+    }
 
     int total = packets->size();
     QString addr = m_socket->peerAddress().toString() + ":" + QString::number(m_socket->peerPort());
 
+    // 2. 先构建本包多包帧(动态字段PacketIndex/TotalPackets/PacketSize自动填充; 包序号1-based)
+    //    为什么要先建包帧: 回复帧的Length动态字段在分包模式下需包含本包帧长度, 故先算出包帧大小
+    const MultiPacketItem &item = packets->at(startIndex);
+    QByteArray pktFrame = item.buildFrame(seq, startIndex + 1, total);
+
     // 1. 发送发送区回复帧(每包都发, 构成完整闭环)
-    QByteArray replyFrame = proto.buildReplyFrame(seq);
+    //    分包模式: Length动态字段 = 回复区(包头+数据区) + 本包(包头+数据区); 不分包时extraLen=0
+    QByteArray replyFrame = proto.buildReplyFrame(seq, pktFrame.size());
     m_socket->write(replyFrame);
     emit dataSent(replyFrame, addr);
     emit logMessage(QString("[多包闭环 %1/%2] 发送区回复帧: %3")
                     .arg(startIndex + 1).arg(total)
                     .arg(QString::fromLatin1(replyFrame.toHex(' '))));
 
-    // 2. 发送本包多包帧(动态字段PacketIndex/TotalPackets/PacketSize自动填充; 包序号1-based)
-    const MultiPacketItem &item = packets->at(startIndex);
-    QByteArray pktFrame = item.buildFrame(seq, startIndex + 1, total);
     m_socket->write(pktFrame);
     emit dataSent(pktFrame, addr);
     emit logMessage(QString("[多包闭环 %1/%2] 本包多包帧: %3")
@@ -284,8 +316,22 @@ void SimConnection::sendMultiPackets(const ProtocolConfig &proto,
         int delay = item.delayMs > 0 ? item.delayMs : intervalMs;
         if (delay < 0) delay = 0;
         quint64 nextSeq = seq + 1;
-        QTimer::singleShot(delay, this, [this, proto, packets, startIndex, nextSeq, intervalMs]() {
-            sendMultiPackets(proto, packets, startIndex + 1, nextSeq, intervalMs);
+        QTimer::singleShot(delay, this, [this, proto, packets, startIndex, nextSeq, intervalMs,
+                                         protoIndex, cycleReschedule]() {
+            sendMultiPackets(proto, packets, startIndex + 1, nextSeq, intervalMs,
+                             protoIndex, cycleReschedule);
         });
+    } else {
+        // 本轮所有包已发完
+        if (cycleReschedule && protoIndex >= 0) {
+            // 多包循环模式: 重启周期定时器, 间隔从"本轮发完"开始计时, 避免上轮未完下轮又起
+            for (auto &entry : m_periodicTimers) {
+                if (entry.protocolIndex == protoIndex) {
+                    entry.mpRoundInProgress = false;
+                    if (entry.timer) entry.timer->start();   // 用原interval重启
+                    break;
+                }
+            }
+        }
     }
 }

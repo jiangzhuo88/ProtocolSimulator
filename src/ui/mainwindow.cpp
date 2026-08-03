@@ -10,6 +10,8 @@
 #include <QDateTime>
 #include <QApplication>
 #include <QDir>
+#include <QTextCursor>
+#include <QTextDocument>
 #include "ZTextEdit.h"
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent), m_server(nullptr), m_currentSceneIndex(-1)
@@ -346,6 +348,20 @@ void MainWindow::onLog(const QString &msg)
 {
     QString time = QDateTime::currentDateTime().toString("hh:mm:ss");
     m_logEdit->append(QString("[%1] %2").arg(time).arg(msg));
+
+    // 限制日志最多显示500行: 超出则从顶部删除多余行, 避免长时间运行内存膨胀
+    const int maxLines = 500;
+    QTextDocument *doc = m_logEdit->document();
+    int excess = doc->blockCount() - maxLines;
+    if (excess > 0) {
+        QTextCursor c(doc);
+        c.movePosition(QTextCursor::Start);
+        // 从开头向下选中excess个块(整块含分隔符), 一次性删除
+        c.movePosition(QTextCursor::NextBlock, QTextCursor::KeepAnchor, excess);
+        c.removeSelectedText();
+    }
+    // 滚动到底部显示最新日志
+    m_logEdit->verticalScrollBar()->setValue(m_logEdit->verticalScrollBar()->maximum());
 }
 
 void MainWindow::updateServiceStatus()

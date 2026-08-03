@@ -193,7 +193,9 @@ struct ProtocolConfig {
     // 构建完整帧
     QByteArray buildFrame(quint64 seq = 0) const;
     // 构建回复帧
-    QByteArray buildReplyFrame(quint64 seq = 0) const;
+    // extraLen: 分包模式下, Length动态字段需额外包含的本包帧字节数(=本包包头+数据区)
+    //           非分包场景传0, Length=回复区(包头+数据区)
+    QByteArray buildReplyFrame(quint64 seq = 0, int extraLen = 0) const;
 
     QJsonObject toJson() const;
     void fromJson(const QJsonObject &obj);

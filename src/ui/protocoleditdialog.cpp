@@ -1987,9 +1987,14 @@ void ProtocolEditDialog::updatePreview()
         for (int i = 0; i < showCount; ++i) {
             const auto &mp = mps[i];
             QByteArray pktFrame = mp.buildFrame(0, i + 1, total);
+            // 本闭环回复帧: Length动态字段含本包帧大小(=回复区包头+数据区+本包包头+数据区)
+            QByteArray clReplyFrame = m_proto.buildReplyFrame(0, pktFrame.size());
             QString name = mp.name.isEmpty() ? QString("包%1").arg(i + 1) : mp.name;
-            replyDetail += QString("<font color='blue'><b>闭环%1: 回复帧+多包帧(%2字节)</b></font><br>")
-                           .arg(name).arg(pktFrame.size());
+            replyDetail += QString("<font color='blue'><b>闭环%1: 回复帧(%2字节)+多包帧(%3字节)</b></font><br>")
+                           .arg(name).arg(clReplyFrame.size()).arg(pktFrame.size());
+            replyDetail += QString("<font color='green'>  └回复帧(Length含本包大小):</font><br>");
+            replyDetail += buildFrameDetail(clReplyFrame, m_proto.replyConfig.headerParams, m_proto.replyConfig.dataParams);
+            replyDetail += QString("<font color='green'>  └多包帧:</font><br>");
             replyDetail += buildFrameDetail(pktFrame, mp.headerParams, mp.dataParams);
             replyDetail += "<br>";
         }

@@ -33,8 +33,9 @@ private:
 
     // 周期回复管理
     struct PeriodicReply {
-        int protocolIndex;
-        QTimer *timer;
+        int protocolIndex = -1;
+        QTimer *timer = nullptr;
+        bool mpRoundInProgress = false;   // 多包循环: 本轮多包是否正在发送(发完才允许下一轮计时)
     };
     QVector<PeriodicReply> m_periodicTimers;
 
@@ -49,9 +50,12 @@ private:
     // startIndex: 当前发送的包索引
     // seq: 当前包序列号
     // intervalMs: 默认包间间隔(单包delayMs<=0时用此值)
+    // protoIndex: 周期回复协议索引(cycleReschedule=true时用于找到对应定时器重启)
+    // cycleReschedule: true=最后一包发完后重启周期定时器(多包循环模式: 等本轮发完再开始计时下一轮)
     void sendMultiPackets(const ProtocolConfig &proto,
                           const QSharedPointer<QVector<MultiPacketItem>> packets,
-                          int startIndex, quint64 seq, int intervalMs);
+                          int startIndex, quint64 seq, int intervalMs,
+                          int protoIndex = -1, bool cycleReschedule = false);
 };
 
 #endif // SIMCONNECTION_H

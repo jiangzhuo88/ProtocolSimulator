@@ -881,7 +881,7 @@ QByteArray ProtocolConfig::buildFrame(quint64 seq) const
     return finalFrame;
 }
 
-QByteArray ProtocolConfig::buildReplyFrame(quint64 seq) const
+QByteArray ProtocolConfig::buildReplyFrame(quint64 seq, int extraLen) const
 {
     // 构建回复数据区(支持随机值)
     QByteArray dataArea;
@@ -903,9 +903,15 @@ QByteArray ProtocolConfig::buildReplyFrame(quint64 seq) const
         if (p.isRandom)
             header += p.toRandomBytes();
         else {
+            // Length动态字段:
+            //   dynamicParam==0 → 数据区长度
+            //   dynamicParam==1 → 包头+数据区(整帧)
+            //   分包模式(extraLen>0) → 上述基础值 + 本包帧字节数(本包包头+数据区)
             int len = dataArea.size();
             if (p.dynamicType == DynamicType::Length && p.dynamicParam == 1)
                 len = dataArea.size() + headerSize;
+            if (p.dynamicType == DynamicType::Length && extraLen > 0)
+                len += extraLen;
             header += p.toBytes(seq, len);
         }
     }
