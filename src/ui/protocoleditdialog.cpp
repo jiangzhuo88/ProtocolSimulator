@@ -1727,7 +1727,7 @@ void ProtocolEditDialog::updatePreview()
         int showCount = qMin(total, 3);
         for (int i = 0; i < showCount; ++i) {
             const auto &mp = mps[i];
-            QByteArray pktFrame = mp.buildFrame(0, i, total);
+            QByteArray pktFrame = mp.buildFrame(0, i + 1, total);
             QString name = mp.name.isEmpty() ? QString("包%1").arg(i + 1) : mp.name;
             replyDetail += QString("<font color='blue'><b>闭环%1: 回复帧+多包帧(%2字节)</b></font><br>")
                            .arg(name).arg(pktFrame.size());

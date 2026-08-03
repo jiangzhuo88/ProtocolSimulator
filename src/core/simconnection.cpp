@@ -267,9 +267,9 @@ void SimConnection::sendMultiPackets(const ProtocolConfig &proto,
                     .arg(startIndex + 1).arg(total)
                     .arg(QString::fromLatin1(replyFrame.toHex(' '))));
 
-    // 2. 发送本包多包帧(动态字段PacketIndex/TotalPackets/PacketSize自动填充)
+    // 2. 发送本包多包帧(动态字段PacketIndex/TotalPackets/PacketSize自动填充; 包序号1-based)
     const MultiPacketItem &item = packets->at(startIndex);
-    QByteArray pktFrame = item.buildFrame(seq, startIndex, total);
+    QByteArray pktFrame = item.buildFrame(seq, startIndex + 1, total);
     m_socket->write(pktFrame);
     emit dataSent(pktFrame, addr);
     emit logMessage(QString("[多包闭环 %1/%2] 本包多包帧: %3")
