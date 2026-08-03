@@ -1,56 +1,42 @@
 #include "protocoltypes.h"
 #include <QDataStream>
 #include <QRandomGenerator>
+#include <QJsonDocument>
 #include <cmath>
 
 // ==================== ProtocolParam ====================
 
 int ProtocolParam::byteSize() const
 {
-    //    switch (type) {
-    //    case ParamType::UInt8:  case ParamType::Int8:   return 1;
-    //    case ParamType::UInt16: case ParamType::Int16:  return 2;
-    //    case ParamType::UInt32: case ParamType::Int32:  case ParamType::Float32: return 4;
-    //    case ParamType::UInt64: case ParamType::Int64:  case ParamType::Float64: return 8;
-    //    case ParamType::String:     return userLength > 0 ? userLength : defaultValue.toLatin1().size();
-    //    case ParamType::StringUtf8: return userLength > 0 ? userLength : defaultValue.toUtf8().size();
-    //    case ParamType::Bytes:      return userLength > 0 ? userLength : (defaultValue.size() / 2); // hex string
-    //    case ParamType::Hex: {
-    //        if(userLength > 0)
-    //            return userLength;
-    //        QString s = defaultValue;
-    //        s.remove(' ');
-    //        return s.size() / 2;
-    //    }
-    //    }
     int singleSize = 0;
+    // 数组且defaultValue为JSON数组时, 取第一个元素计算单元素大小
+    QString val = defaultValue;
+    if (arrayCount > 1 && val.trimmed().startsWith('[')) {
+        QStringList vals = parseDefaultValues();
+        if (!vals.isEmpty()) val = vals.first();
+    }
     switch (type) {
-    case ParamType::UInt8:  case ParamType::Int8:   singleSize = 1;break;
-    case ParamType::UInt16: case ParamType::Int16:  singleSize = 2;break;
-    case ParamType::UInt32: case ParamType::Int32:  case ParamType::Float32: singleSize = 4;break;
-    case ParamType::UInt64: case ParamType::Int64:  case ParamType::Float64: singleSize = 8;break;
-    case ParamType::String:     return singleSize = userLength > 0 ? userLength : defaultValue.toLatin1().size();break;
-    case ParamType::StringUtf8: return singleSize = userLength > 0 ? userLength : defaultValue.toUtf8().size();break;
-    case ParamType::Bytes:      return singleSize = userLength > 0 ? userLength : (defaultValue.size() / 2);break; // hex string
+    case ParamType::UInt8:  case ParamType::Int8:   singleSize = 1; break;
+    case ParamType::UInt16: case ParamType::Int16:  singleSize = 2; break;
+    case ParamType::UInt32: case ParamType::Int32:  case ParamType::Float32: singleSize = 4; break;
+    case ParamType::UInt64: case ParamType::Int64:  case ParamType::Float64: singleSize = 8; break;
+    case ParamType::String:     singleSize = userLength > 0 ? userLength : val.toLatin1().size(); break;
+    case ParamType::StringUtf8: singleSize = userLength > 0 ? userLength : val.toUtf8().size(); break;
+    case ParamType::Bytes:      singleSize = userLength > 0 ? userLength : (val.size() / 2); break;
     case ParamType::Hex: {
-        if(userLength > 0)
-        {
-            //            return userLength;
-            singleSize = userLength;
-            break;
-        }
-        QString s = defaultValue;
+        if (userLength > 0) { singleSize = userLength; break; }
+        QString s = val;
         s.remove(' ');
-        //        return s.size() / 2;
         singleSize = s.size() / 2;
         break;
     }
     }
-    //    return 0;
+    // 数组: 单元素大小 × 元素个数
     return singleSize * (arrayCount > 0 ? arrayCount : 1);
 }
 
-QByteArray ProtocolParam::toBytes(quint64 seq, int dataAreaLen, const QByteArray &fullFrame) const
+QByteArray ProtocolParam::toBytes(quint64 seq, int dataAreaLen, const QByteArray &fullFrame,
+                                  int packetIndex, int packetSize, int totalPackets) const
 {
     // 处理动态类型
     if (dynamicType == DynamicType::Timestamp) {
@@ -106,6 +92,48 @@ QByteArray ProtocolParam::toBytes(quint64 seq, int dataAreaLen, const QByteArray
         return data;
     }
 
+    // 分包序号
+    if (dynamicType == DynamicType::PacketIndex) {
+        QByteArray data;
+        QDataStream ds(&data, QIODevice::WriteOnly);
+        ds.setByteOrder(byteOrder == ByteOrder::BigEndian ? QDataStream::BigEndian : QDataStream::LittleEndian);
+        int sz = byteSize();
+        quint64 val = (quint64)qMax(0, packetIndex);
+        if (sz <= 1) ds << (quint8)val;
+        else if (sz <= 2) ds << (quint16)val;
+        else if (sz <= 4) ds << (quint32)val;
+        else ds << val;
+        return data;
+    }
+
+    // 分包大小(当前包负载字节数)
+    if (dynamicType == DynamicType::PacketSize) {
+        QByteArray data;
+        QDataStream ds(&data, QIODevice::WriteOnly);
+        ds.setByteOrder(byteOrder == ByteOrder::BigEndian ? QDataStream::BigEndian : QDataStream::LittleEndian);
+        int sz = byteSize();
+        quint64 val = (quint64)qMax(0, packetSize);
+        if (sz <= 1) ds << (quint8)val;
+        else if (sz <= 2) ds << (quint16)val;
+        else if (sz <= 4) ds << (quint32)val;
+        else ds << val;
+        return data;
+    }
+
+    // 总包数
+    if (dynamicType == DynamicType::TotalPackets) {
+        QByteArray data;
+        QDataStream ds(&data, QIODevice::WriteOnly);
+        ds.setByteOrder(byteOrder == ByteOrder::BigEndian ? QDataStream::BigEndian : QDataStream::LittleEndian);
+        int sz = byteSize();
+        quint64 val = (quint64)qMax(0, totalPackets);
+        if (sz <= 1) ds << (quint8)val;
+        else if (sz <= 2) ds << (quint16)val;
+        else if (sz <= 4) ds << (quint32)val;
+        else ds << val;
+        return data;
+    }
+
     if (dynamicType == DynamicType::Checksum) {
         // 计算fullFrame中从dynamicParam开始到末尾的校验和
         quint8 sum = 0;
@@ -116,166 +144,162 @@ QByteArray ProtocolParam::toBytes(quint64 seq, int dataAreaLen, const QByteArray
         QByteArray data(1, (char)sum);
         return data;
     }
+
+    // 非动态: 数组且defaultValue为JSON数组时, 逐元素生成
+    if (arrayCount > 1 && defaultValue.trimmed().startsWith('[')) {
+        QStringList vals = parseDefaultValues();
+        QByteArray result;
+        for (const auto &v : vals)
+            result += singleElementToBytes(v);
+        // 不足arrayCount个时用0补齐
+        int singleSz = vals.isEmpty() ? 1 : (result.size() / vals.size());
+        if (singleSz <= 0) singleSz = 1;
+        while (result.size() < singleSz * arrayCount)
+            result += singleElementToBytes("0");
+        return result;
+    }
+
+    // 单值或旧式数组(重复单值)
+    QByteArray singleData = singleElementToBytes(defaultValue);
+    if (arrayCount <= 1) return singleData;
+    QByteArray result;
+    result.reserve(singleData.size() * arrayCount);
+    for (int i = 0; i < arrayCount; ++i)
+        result += singleData;
+    return result;
+}
+
+QByteArray ProtocolParam::singleElementToBytes(const QString &val) const
+{
     QByteArray singleData;
-    // 非动态，使用默认值
     switch (type) {
     case ParamType::UInt8: {
         bool ok;
-        quint8 v = defaultValue.toUInt(&ok, 0);
-        //        return QByteArray(1, (char)v);
-        singleData = QByteArray(1,(char)v);
+        quint8 v = val.toUInt(&ok, 0);
+        singleData = QByteArray(1, (char)v);
         break;
     }
     case ParamType::Int8: {
         bool ok;
-        qint8 v = defaultValue.toInt(&ok, 0);
-        //        return QByteArray(1, (char)v);
-        singleData = QByteArray(1,(char)v);
+        qint8 v = val.toInt(&ok, 0);
+        singleData = QByteArray(1, (char)v);
         break;
     }
     case ParamType::UInt16: {
         bool ok;
-        quint16 v = defaultValue.toUInt(&ok, 0);
-        //        QByteArray data;
-        //        QDataStream ds(&data, QIODevice::WriteOnly);
+        quint16 v = val.toUInt(&ok, 0);
         QDataStream ds(&singleData, QIODevice::WriteOnly);
         ds.setByteOrder(byteOrder == ByteOrder::BigEndian ? QDataStream::BigEndian : QDataStream::LittleEndian);
         ds << v;
-        //        return data;
         break;
     }
     case ParamType::Int16: {
         bool ok;
-        qint16 v = defaultValue.toInt(&ok, 0);
-        //        QByteArray data;
-        //        QDataStream ds(&data, QIODevice::WriteOnly);
+        qint16 v = val.toInt(&ok, 0);
         QDataStream ds(&singleData, QIODevice::WriteOnly);
         ds.setByteOrder(byteOrder == ByteOrder::BigEndian ? QDataStream::BigEndian : QDataStream::LittleEndian);
         ds << v;
-        //        return data;
         break;
     }
     case ParamType::UInt32: {
         bool ok;
-        quint32 v = defaultValue.toUInt(&ok, 0);
-        //        QByteArray data;
-        //        QDataStream ds(&data, QIODevice::WriteOnly);
+        quint32 v = val.toUInt(&ok, 0);
         QDataStream ds(&singleData, QIODevice::WriteOnly);
         ds.setByteOrder(byteOrder == ByteOrder::BigEndian ? QDataStream::BigEndian : QDataStream::LittleEndian);
         ds << v;
-        //        return data;
         break;
     }
     case ParamType::Int32: {
         bool ok;
-        qint32 v = defaultValue.toInt(&ok, 0);
-        //        QByteArray data;
-        //        QDataStream ds(&data, QIODevice::WriteOnly);
+        qint32 v = val.toInt(&ok, 0);
         QDataStream ds(&singleData, QIODevice::WriteOnly);
         ds.setByteOrder(byteOrder == ByteOrder::BigEndian ? QDataStream::BigEndian : QDataStream::LittleEndian);
         ds << v;
-        //        return data;
         break;
     }
     case ParamType::UInt64: {
         bool ok;
-        quint64 v = defaultValue.toULongLong(&ok, 0);
-        //        QByteArray data;
-        //        QDataStream ds(&data, QIODevice::WriteOnly);
+        quint64 v = val.toULongLong(&ok, 0);
         QDataStream ds(&singleData, QIODevice::WriteOnly);
         ds.setByteOrder(byteOrder == ByteOrder::BigEndian ? QDataStream::BigEndian : QDataStream::LittleEndian);
         ds << v;
-        //        return data;
         break;
     }
     case ParamType::Int64: {
         bool ok;
-        qint64 v = defaultValue.toLongLong(&ok, 0);
-        //        QByteArray data;
-        //        QDataStream ds(&data, QIODevice::WriteOnly);
+        qint64 v = val.toLongLong(&ok, 0);
         QDataStream ds(&singleData, QIODevice::WriteOnly);
         ds.setByteOrder(byteOrder == ByteOrder::BigEndian ? QDataStream::BigEndian : QDataStream::LittleEndian);
         ds << v;
-        //        return data;
         break;
     }
     case ParamType::Float32: {
-        float v = defaultValue.toFloat();
-        //        QByteArray data;
-        //        QDataStream ds(&data, QIODevice::WriteOnly);
+        float v = val.toFloat();
         QDataStream ds(&singleData, QIODevice::WriteOnly);
         ds.setFloatingPointPrecision(QDataStream::SinglePrecision);
         ds.setByteOrder(byteOrder == ByteOrder::BigEndian ? QDataStream::BigEndian : QDataStream::LittleEndian);
         ds << v;
-        //        return data;
         break;
     }
     case ParamType::Float64: {
-        double v = defaultValue.toDouble();
-        //        QByteArray data;
-        //        QDataStream ds(&data, QIODevice::WriteOnly);
+        double v = val.toDouble();
         QDataStream ds(&singleData, QIODevice::WriteOnly);
         ds.setFloatingPointPrecision(QDataStream::DoublePrecision);
         ds.setByteOrder(byteOrder == ByteOrder::BigEndian ? QDataStream::BigEndian : QDataStream::LittleEndian);
         ds << v;
-        //        return data;
         break;
     }
-    case ParamType::String:
-    {
-        //        return defaultValue.toLatin1();
-        singleData = defaultValue.toLatin1();
-        if(userLength > 0)
-        {
-            singleData.resize(userLength);
-        }
-        //        return data;
+    case ParamType::String: {
+        singleData = val.toLatin1();
+        if (userLength > 0) singleData.resize(userLength);
         break;
     }
-    case ParamType::StringUtf8:
-    {
-        //        return defaultValue.toUtf8();
-        singleData =  defaultValue.toUtf8();
-        if(userLength > 0)
-        {
-            singleData.resize(userLength);
-        }
-        //        return data;
+    case ParamType::StringUtf8: {
+        singleData = val.toUtf8();
+        if (userLength > 0) singleData.resize(userLength);
         break;
     }
     case ParamType::Bytes:
     case ParamType::Hex: {
-        QString s = defaultValue;
+        QString s = val;
         s.remove(' ').remove('\n').remove('\t');
-        //        return QByteArray::fromHex(s.toLatin1());
-        if(s.startsWith("0x",Qt::CaseInsensitive))
-        {
-            s.remove(0,2);
-        }
+        if (s.startsWith("0x", Qt::CaseInsensitive))
+            s.remove(0, 2);
         singleData = QByteArray::fromHex(s.toLatin1());
-        if(userLength > 0)
-        {
-            singleData.resize(userLength);
-        }
-        //        return data;
+        if (userLength > 0) singleData.resize(userLength);
         break;
     }
     }
-    //    return QByteArray();
-    if(arrayCount <= 1) return singleData;
-    QByteArray result;
-    result.reserve(singleData.size() * arrayCount);
-    for(int i = 0;i < arrayCount;++i)
-    {
-        result += singleData;
+    return singleData;
+}
+
+QStringList ProtocolParam::parseDefaultValuesFromString(const QString &defaultValue)
+{
+    QStringList result;
+    QString s = defaultValue.trimmed();
+    if (s.startsWith('[')) {
+        QJsonDocument doc = QJsonDocument::fromJson(s.toUtf8());
+        if (doc.isArray()) {
+            for (const auto &v : doc.array())
+                result.append(v.toString());
+        }
     }
+    if (result.isEmpty())
+        result.append(defaultValue);
     return result;
+}
+
+QStringList ProtocolParam::parseDefaultValues() const
+{
+    return parseDefaultValuesFromString(defaultValue);
 }
 
 QByteArray ProtocolParam::toRandomBytes() const
 {
     if (!isRandom) return toBytes();
+
     int count = arrayCount > 0 ? arrayCount : 1;
+
     if (type == ParamType::Bytes || type == ParamType::Hex) {
         int len = randomLength;
         if (len <= 0) len = byteSize();
@@ -285,18 +309,14 @@ QByteArray ProtocolParam::toRandomBytes() const
         return data;
     }
 
-    //    if (type == ParamType::Float32 || type == ParamType::Float64) {
-    //        double minVal = randomMin.isEmpty() ? 0.0 : randomMin.toDouble();
-    //        double maxVal = randomMax.isEmpty() ? 1.0 : randomMax.toDouble();
-    //        double r = QRandomGenerator::global()->generateDouble();
-    //        double val = minVal + r * (maxVal - minVal);
-    auto genSingleRandom = [this,count]()-> QByteArray{
-        if(type == ParamType::Float32 || type == ParamType::Float64)
-        {
+    // 生成单个随机元素的字节
+    auto genSingleRandom = [this, count]() -> QByteArray {
+        if (type == ParamType::Float32 || type == ParamType::Float64) {
             double minVal = randomMin.isEmpty() ? 0.0 : randomMin.toDouble();
             double maxVal = randomMax.isEmpty() ? 1.0 : randomMax.toDouble();
             double r = QRandomGenerator::global()->generateDouble();
             double val = minVal + r * (maxVal - minVal);
+
             QByteArray data;
             QDataStream ds(&data, QIODevice::WriteOnly);
             ds.setByteOrder(byteOrder == ByteOrder::BigEndian ? QDataStream::BigEndian : QDataStream::LittleEndian);
@@ -324,6 +344,7 @@ QByteArray ProtocolParam::toRandomBytes() const
         QByteArray data;
         QDataStream ds(&data, QIODevice::WriteOnly);
         ds.setByteOrder(byteOrder == ByteOrder::BigEndian ? QDataStream::BigEndian : QDataStream::LittleEndian);
+
         int singleSz = byteSize() / count;
         if (singleSz <= 1) ds << (quint8)val;
         else if (singleSz <= 2) ds << (quint16)val;
@@ -331,14 +352,13 @@ QByteArray ProtocolParam::toRandomBytes() const
         else ds << (quint64)val;
         return data;
     };
+
     QByteArray single = genSingleRandom();
-    if(count <= 1) return single;
+    if (count <= 1) return single;
     QByteArray result;
     result.reserve(single.size() * count);
-    for(int i = 0;i<count;++i)
-    {
+    for (int i = 0; i < count; ++i)
         result += genSingleRandom();
-    }
     return result;
 }
 
@@ -613,6 +633,9 @@ QString ProtocolParam::dynamicTypeToString(DynamicType d)
     case DynamicType::Length: return "Length";
     case DynamicType::Checksum: return "Checksum";
     case DynamicType::Sequence: return "Sequence";
+    case DynamicType::PacketIndex: return "PacketIndex";
+    case DynamicType::PacketSize: return "PacketSize";
+    case DynamicType::TotalPackets: return "TotalPackets";
     }
     return "None";
 }
@@ -623,6 +646,9 @@ DynamicType ProtocolParam::stringToDynamicType(const QString &s)
     if (s == "Length") return DynamicType::Length;
     if (s == "Checksum") return DynamicType::Checksum;
     if (s == "Sequence") return DynamicType::Sequence;
+    if (s == "PacketIndex") return DynamicType::PacketIndex;
+    if (s == "PacketSize") return DynamicType::PacketSize;
+    if (s == "TotalPackets") return DynamicType::TotalPackets;
     return DynamicType::None;
 }
 
@@ -647,6 +673,129 @@ MatchMode ProtocolParam::stringToMatchMode(const QString &s)
     return MatchMode::Exact;
 }
 
+// ==================== PacketSplitConfig ====================
+
+int PacketSplitConfig::effectiveChunkSize() const
+{
+    if (chunkSize > 0) return chunkSize;
+    if (payloadFieldIndex >= 0 && payloadFieldIndex < dataParams.size())
+        return dataParams[payloadFieldIndex].byteSize();
+    return 1024;
+}
+
+int PacketSplitConfig::calcPacketCount(const QByteArray &payload) const
+{
+    int cs = effectiveChunkSize();
+    if (cs <= 0 || payload.isEmpty()) return 0;
+    return (payload.size() + cs - 1) / cs;
+}
+
+QByteArray PacketSplitConfig::buildPacket(int packetIndex, int totalPackets,
+                                          const QByteArray &chunk, quint64 seq) const
+{
+    int pktSize = chunk.size();
+
+    // 构建数据区: 负载字段用chunk, 其他字段正常
+    QByteArray dataArea;
+    for (int i = 0; i < dataParams.size(); ++i) {
+        if (i == payloadFieldIndex) {
+            dataArea += chunk;
+        } else {
+            const auto &p = dataParams[i];
+            if (p.isRandom)
+                dataArea += p.toRandomBytes();
+            else
+                dataArea += p.toBytes(seq, 0, QByteArray(), packetIndex, pktSize, totalPackets);
+        }
+    }
+
+    // 计算帧头总长度
+    int headerSize = 0;
+    for (const auto &p : headerParams)
+        headerSize += p.byteSize();
+
+    // 构建帧头
+    QByteArray header;
+    for (const auto &p : headerParams) {
+        if (p.isRandom) {
+            header += p.toRandomBytes();
+        } else {
+            int len = dataArea.size();
+            if (p.dynamicType == DynamicType::Length && p.dynamicParam == 1)
+                len = dataArea.size() + headerSize;
+            header += p.toBytes(seq, len, QByteArray(), packetIndex, pktSize, totalPackets);
+        }
+    }
+
+    QByteArray frame = header + dataArea;
+
+    // 第二遍: 校验和字段
+    QByteArray finalFrame;
+    int hdrOffset = 0;
+    for (const auto &p : headerParams) {
+        if (p.dynamicType == DynamicType::Checksum) {
+            finalFrame += p.toBytes(seq, dataArea.size(), frame, packetIndex, pktSize, totalPackets);
+        } else {
+            finalFrame += frame.mid(hdrOffset, p.byteSize());
+        }
+        hdrOffset += p.byteSize();
+    }
+    finalFrame += dataArea;
+
+    return finalFrame;
+}
+
+QJsonObject PacketSplitConfig::toJson() const
+{
+    QJsonObject o;
+    o["enabled"] = enabled;
+    o["payloadFieldIndex"] = payloadFieldIndex;
+    o["chunkSize"] = chunkSize;
+    o["intervalMs"] = intervalMs;
+    o["cycleEnabled"] = cycleEnabled;
+    o["cycleIntervalMs"] = cycleIntervalMs;
+
+    QJsonArray hdr;
+    for (const auto &p : headerParams) hdr.append(p.toJson());
+    o["headerParams"] = hdr;
+
+    QJsonArray dat;
+    for (const auto &p : dataParams) dat.append(p.toJson());
+    o["dataParams"] = dat;
+
+    // 负载数据以hex字符串存储
+    QJsonArray plds;
+    for (const auto &pl : payloads)
+        plds.append(QString::fromLatin1(pl.toHex()));
+    o["payloads"] = plds;
+    return o;
+}
+
+void PacketSplitConfig::fromJson(const QJsonObject &o)
+{
+    enabled = o["enabled"].toBool(false);
+    payloadFieldIndex = o["payloadFieldIndex"].toInt(-1);
+    chunkSize = o["chunkSize"].toInt(1024);
+    intervalMs = o["intervalMs"].toInt(100);
+    cycleEnabled = o["cycleEnabled"].toBool(false);
+    cycleIntervalMs = o["cycleIntervalMs"].toInt(1000);
+
+    headerParams.clear();
+    QJsonArray hdr = o["headerParams"].toArray();
+    for (const auto &v : hdr) { ProtocolParam p; p.fromJson(v.toObject()); headerParams.append(p); }
+
+    dataParams.clear();
+    QJsonArray dat = o["dataParams"].toArray();
+    for (const auto &v : dat) { ProtocolParam p; p.fromJson(v.toObject()); dataParams.append(p); }
+
+    payloads.clear();
+    QJsonArray plds = o["payloads"].toArray();
+    for (const auto &v : plds) {
+        QByteArray pl = QByteArray::fromHex(v.toString().toLatin1());
+        payloads.append(pl);
+    }
+}
+
 // ==================== ReplyConfig ====================
 
 QJsonObject ReplyConfig::toJson() const
@@ -662,6 +811,8 @@ QJsonObject ReplyConfig::toJson() const
     QJsonArray dat;
     for (const auto &p : dataParams) dat.append(p.toJson());
     o["dataParams"] = dat;
+
+    o["splitConfig"] = splitConfig.toJson();
     return o;
 }
 
@@ -675,6 +826,7 @@ void ReplyConfig::fromJson(const QJsonObject &o)
     for (const auto &v : hdr) { ProtocolParam p; p.fromJson(v.toObject()); headerParams.append(p); }
     QJsonArray dat = o["dataParams"].toArray();
     for (const auto &v : dat) { ProtocolParam p; p.fromJson(v.toObject()); dataParams.append(p); }
+    splitConfig.fromJson(o["splitConfig"].toObject());
 }
 
 QString ReplyConfig::modeToString(ReplyMode m)
@@ -685,6 +837,7 @@ QString ReplyConfig::modeToString(ReplyMode m)
     case ReplyMode::Periodic1s: return "Periodic1s";
     case ReplyMode::Periodic5s: return "Periodic5s";
     case ReplyMode::PeriodicCustom: return "PeriodicCustom";
+    case ReplyMode::MultiPacket: return "MultiPacket";
     }
     return "None";
 }
@@ -695,6 +848,7 @@ ReplyMode ReplyConfig::stringToMode(const QString &s)
     if (s == "Periodic1s") return ReplyMode::Periodic1s;
     if (s == "Periodic5s") return ReplyMode::Periodic5s;
     if (s == "PeriodicCustom") return ReplyMode::PeriodicCustom;
+    if (s == "MultiPacket") return ReplyMode::MultiPacket;
     return ReplyMode::None;
 }
 
@@ -727,22 +881,18 @@ QByteArray ProtocolConfig::buildFrame(quint64 seq) const
     for (const auto &p : dataParams)
         dataArea += p.toBytes(seq, 0);
 
+    // 计算帧头总长度
     int headerSize = 0;
-    for(const ProtocolParam &p : headerParams)
-    {
+    for (const auto &p : headerParams)
         headerSize += p.byteSize();
-    }
+
     // 构建帧头(需要数据区长度)
     QByteArray header;
-    //    for (const auto &p : headerParams)
-    //        header += p.toBytes(seq, dataArea.size());
-    for (const ProtocolParam &p : headerParams) {
+    for (const auto &p : headerParams) {
         int len = dataArea.size();
-        if(p.dynamicType == DynamicType::Length)
-        {
+        if (p.dynamicType == DynamicType::Length && p.dynamicParam == 1)
             len = dataArea.size() + headerSize;
-        }
-        header += p.toBytes(seq,len);
+        header += p.toBytes(seq, len);
     }
 
     // 重新构建含有校验和的字段
@@ -774,21 +924,24 @@ QByteArray ProtocolConfig::buildReplyFrame(quint64 seq) const
         else
             dataArea += p.toBytes(seq, 0);
     }
+
+    // 计算回复帧头总长度
     int headerSize = 0;
-    for(const ProtocolParam &p : replyConfig.headerParams)
-    {
+    for (const auto &p : replyConfig.headerParams)
         headerSize += p.byteSize();
-    }
+
     // 构建回复帧头
     QByteArray header;
-    for (const ProtocolParam &p : replyConfig.headerParams) {
+    for (const auto &p : replyConfig.headerParams) {
         if (p.isRandom)
             header += p.toRandomBytes();
-        else
-            header += p.toBytes(seq, dataArea.size() + headerSize);
+        else {
+            int len = dataArea.size();
+            if (p.dynamicType == DynamicType::Length && p.dynamicParam == 1)
+                len = dataArea.size() + headerSize;
+            header += p.toBytes(seq, len);
+        }
     }
-
-
 
     QByteArray frame = header + dataArea;
 
@@ -797,8 +950,7 @@ QByteArray ProtocolConfig::buildReplyFrame(quint64 seq) const
     int hdrOffset = 0;
     for (const auto &p : replyConfig.headerParams) {
         if (p.dynamicType == DynamicType::Checksum) {
-            //            finalFrame += p.toBytes(seq, dataArea.size(), frame);
-            finalFrame += p.toBytes(seq, dataArea.size() + headerSize, frame);
+            finalFrame += p.toBytes(seq, dataArea.size(), frame);
         } else {
             finalFrame += frame.mid(hdrOffset, p.byteSize());
         }
@@ -826,11 +978,10 @@ QJsonObject ProtocolConfig::toJson() const
     o["replyConfig"] = replyConfig.toJson();
     o["isActivePush"] = isActivePush;
     o["pushIntervalMs"] = pushIntervalMs;
+    o["fixedFrameLength"] = fixedFrameLength;
+    o["stopAllPeriodicOnMatch"] = stopAllPeriodicOnMatch;
     QJsonArray stopArr;
-    for(const auto &n : stopPeriodicProtocolNames)
-    {
-        stopArr.append(n);
-    }
+    for (const auto &n : stopPeriodicProtocolNames) stopArr.append(n);
     o["stopPeriodicProtocolNames"] = stopArr;
     return o;
 }
@@ -848,12 +999,11 @@ void ProtocolConfig::fromJson(const QJsonObject &o)
     replyConfig.fromJson(o["replyConfig"].toObject());
     isActivePush = o["isActivePush"].toBool(false);
     pushIntervalMs = o["pushIntervalMs"].toInt(1000);
+    fixedFrameLength = o["fixedFrameLength"].toInt(0);
+    stopAllPeriodicOnMatch = o["stopAllPeriodicOnMatch"].toBool(false);
     stopPeriodicProtocolNames.clear();
     QJsonArray stopArr = o["stopPeriodicProtocolNames"].toArray();
-    for(const auto &v : stopArr)
-    {
-        stopPeriodicProtocolNames.append(v.toString());
-    }
+    for (const auto &v : stopArr) stopPeriodicProtocolNames.append(v.toString());
 }
 
 // ==================== SceneConfig ====================

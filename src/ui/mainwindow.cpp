@@ -160,9 +160,18 @@ void MainWindow::refreshProtocolTable()
         if (proto.isActivePush) {
             replyStr = QString("定时上报(%1ms)").arg(proto.pushIntervalMs);
         } else {
-            replyStr = ReplyConfig::modeToString(proto.replyConfig.mode);
-            if (proto.replyConfig.mode == ReplyMode::PeriodicCustom)
+            // 旧MultiPacket配置显示为Once(已无独立UI)
+            ReplyMode m = proto.replyConfig.mode;
+            if (m == ReplyMode::MultiPacket) {
+                replyStr = ReplyConfig::modeToString(ReplyMode::Once);
+            } else {
+                replyStr = ReplyConfig::modeToString(m);
+            }
+            if (m == ReplyMode::PeriodicCustom)
                 replyStr += QString("(%1ms)").arg(proto.replyConfig.customIntervalMs);
+            // 有拼包区则标注拼包数
+            if (!proto.replyConfig.multiPackets.isEmpty())
+                replyStr += QString("+拼包%1").arg(proto.replyConfig.multiPackets.size());
         }
         m_protocolTable->setItem(i, 4, new QTableWidgetItem(replyStr));
 

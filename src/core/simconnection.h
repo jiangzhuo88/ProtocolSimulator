@@ -4,6 +4,7 @@
 #include <QObject>
 #include <QTcpSocket>
 #include <QTimer>
+#include <QSharedPointer>
 #include "protocoltypes.h"
 
 class SimConnection : public QObject
@@ -23,7 +24,6 @@ signals:
 
 private slots:
     void onReadyRead();
-    void onPeriodicReply();
 
 private:
     QTcpSocket *m_socket;
@@ -42,6 +42,14 @@ private:
     void startPeriodicReply(int protoIndex, int intervalMs);
     void stopAllPeriodicReplies();
     void stopPeriodicReplyByName(const QString &name);
+
+    // 分包下发: 拆分负载→逐包构建→间隔发送→多负载循环
+    // config: 分包配置(共享指针保活)
+    // payloadIndex: 当前发送的负载索引
+    // packetIndex: 当前负载内的包索引
+    // seq: 当前包序列号
+    void sendSplitPackets(const QSharedPointer<PacketSplitConfig> config,
+                          int payloadIndex, int packetIndex, quint64 seq);
 };
 
 #endif // SIMCONNECTION_H

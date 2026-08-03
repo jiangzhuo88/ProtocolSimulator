@@ -2,6 +2,7 @@
 #define PROTOCOLTYPES_H
 
 #include <QString>
+#include <QStringList>
 #include <QVector>
 #include <QByteArray>
 #include <QJsonObject>
@@ -35,11 +36,14 @@ enum class ByteOrder {
 
 // 动态类型
 enum class DynamicType {
-    None,       // 非动态，使用默认值
-    Timestamp,  // 当前时间戳(秒或毫秒)
-    Length,     // 数据区长度
-    Checksum,   // 校验和
-    Sequence    // 自增序列号
+    None,         // 非动态，使用默认值
+    Timestamp,    // 当前时间戳(秒或毫秒)
+    Length,       // 数据区长度
+    Checksum,     // 校验和
+    Sequence,     // 自增序列号
+    PacketIndex,  // 分包序号(当前包在分包中的索引,0-based)
+    PacketSize,   // 分包大小(当前包负载字节数)
+    TotalPackets  // 总包数
 };
 
 // 匹配模式
@@ -57,7 +61,8 @@ enum class ReplyMode {
     Once,           // 回复一次
     Periodic1s,     // 1秒周期回复
     Periodic5s,     // 5秒周期回复
-    PeriodicCustom  // 自定义周期回复
+    PeriodicCustom, // 自定义周期回复
+    MultiPacket     // 多包回复(收到指令后连续发送多包)
 };
 
 // 单个协议参数
@@ -73,8 +78,9 @@ struct ProtocolParam {
     MatchMode matchMode;       // 匹配模式
     QString matchValue;        // 匹配值
     QString matchValue2;       // 第二匹配值(范围匹配时的max, 掩码匹配时的expected)
-    int userLength;            // 用户显式指定的长度
-    int arrayCount;            // 数组元素个数（1=单个值，>1=同类型数组）
+
+    int userLength;            // 用户显式指定的长度(仅Hex/Bytes/String类型用,0=自动推导)
+    int arrayCount;            // 数组元素个数(1=单个值, >1=同类型数组, 如1600个Int16)
 
     bool isRandom;             // 是否随机值(用于回复参数)
     QString randomMin;         // 随机最小值
@@ -97,7 +103,16 @@ struct ProtocolParam {
     // 获取参数占用的字节数
     int byteSize() const;
     // 将默认值转为字节序列
-    QByteArray toBytes(quint64 seq = 0, int dataAreaLen = 0, const QByteArray &fullFrame = QByteArray()) const;
+    // packetIndex/packetSize/totalPackets: 分包上下文(-1=非分包模式)
+    QByteArray toBytes(quint64 seq = 0, int dataAreaLen = 0, 
+                       const QByteArray &fullFrame = QByteArray(),
+                       int packetIndex = -1, int packetSize = -1, int totalPackets = -1) const;
+    // 单元素(非动态)按指定字符串值转字节(供数组逐元素生成)
+    QByteArray singleElementToBytes(const QString &val) const;
+    // 解析默认值字符串为字符串列表(JSON数组返回多个, 否则返回单个原值)
+    static QStringList parseDefaultValuesFromString(const QString &defaultValue);
+    // 解析本参数默认值为字符串列表(数组且为JSON数组时返回多个元素, 否则返回单个)
+    QStringList parseDefaultValues() const;
     // 生成随机值字节
     QByteArray toRandomBytes() const;
     // 从字节序列解析值
@@ -120,12 +135,41 @@ struct ProtocolParam {
     static MatchMode stringToMatchMode(const QString &s);
 };
 
+// 分包配置(模板+负载+循环)
+struct PacketSplitConfig {
+    bool enabled;                          // 是否启用分包下发
+    QVector<ProtocolParam> headerParams;   // 包模板帧头参数(可设PacketIndex/PacketSize/TotalPackets)
+    QVector<ProtocolParam> dataParams;     // 包模板数据区参数(其中一个可标记为负载)
+    int payloadFieldIndex;                 // 负载数据字段在dataParams中的索引(-1=无负载字段)
+    int chunkSize;                         // 每包负载字节数(0=用负载字段userLength)
+    int intervalMs;                        // 包间发送间隔(ms)
+    bool cycleEnabled;                     // 是否多负载循环
+    int cycleIntervalMs;                   // 循环间隔(一轮发完到下一轮,ms)
+    QVector<QByteArray> payloads;          // 多个负载数据(如多张图片)
+
+    PacketSplitConfig()
+        : enabled(false), payloadFieldIndex(-1)
+        , chunkSize(1024), intervalMs(100)
+        , cycleEnabled(false), cycleIntervalMs(1000) {}
+
+    QJsonObject toJson() const;
+    void fromJson(const QJsonObject &obj);
+    // 构建第packetIndex个分包(基于chunk负载数据)
+    QByteArray buildPacket(int packetIndex, int totalPackets,
+                           const QByteArray &chunk, quint64 seq) const;
+    // 计算给定负载的分包数
+    int calcPacketCount(const QByteArray &payload) const;
+    // 获取每包负载大小
+    int effectiveChunkSize() const;
+};
+
 // 回复配置
 struct ReplyConfig {
     ReplyMode mode;                         // 回复模式
     int customIntervalMs;                   // 自定义周期(毫秒)
-    QVector<ProtocolParam> headerParams;    // 回复帧头参数
-    QVector<ProtocolParam> dataParams;      // 回复数据区参数
+    QVector<ProtocolParam> headerParams;    // 回复帧头参数(发送区)
+    QVector<ProtocolParam> dataParams;      // 回复数据区参数(发送区)
+    PacketSplitConfig splitConfig;          // 分包配置(发送区帧发送后, 按模板拆分负载下发)
 
     ReplyConfig() : mode(ReplyMode::None), customIntervalMs(1000) {}
 
@@ -144,9 +188,11 @@ struct ProtocolConfig {
     ReplyConfig replyConfig;                // 回复配置
     bool isActivePush;                      // 是否主动上报(心跳/状态)
     int pushIntervalMs;                     // 主动上报周期(ms)
-    QStringList stopPeriodicProtocolNames;  //匹配成功时要停止的周期回复协议
+    int fixedFrameLength;                   // 固定帧总长度(0=根据参数自动计算, >0=手动指定)
+    bool stopAllPeriodicOnMatch;            // 匹配成功时停止所有正在运行的周期回复
+    QStringList stopPeriodicProtocolNames;  // 匹配成功时要停止的周期回复协议名称列表
 
-    ProtocolConfig() : isActivePush(false), pushIntervalMs(1000) {}
+    ProtocolConfig() : isActivePush(false), pushIntervalMs(1000), fixedFrameLength(0), stopAllPeriodicOnMatch(false) {}
 
     // 是否有效(主动上报始终有效, 或至少有一个参数启用了匹配)
     bool isValid() const;

@@ -13,10 +13,105 @@
 #include <QScrollArea>
 #include <QApplication>
 #include <QListWidget>
+#include <QPushButton>
+#include <QDialogButtonBox>
+#include <QTableWidgetItem>
+#include <QInputDialog>
+#include <QFileDialog>
+#include <QFile>
+#include <QFileInfo>
 #include "collapsiblegroupbox.h"
 
-ProtocolEditDialog::ProtocolEditDialog(ProtocolConfig &proto,QVector<ProtocolConfig>* allProtocols, QWidget *parent)
-    : QDialog(parent), m_proto(proto),m_allProtocols(allProtocols),m_loading(false),wheelFilter(new WheelEventFilter(this))
+// ================== 数组编辑对话框(内部类, 无需Q_OBJECT) ==================
+class ArrayEditDialog : public QDialog
+{
+public:
+    ArrayEditDialog(int count, const QStringList &values, const QString &typeName, QWidget *parent = nullptr)
+        : QDialog(parent)
+    {
+        setWindowTitle(QString("编辑数组值 (%1个 %2)").arg(count).arg(typeName));
+        resize(420, 500);
+        auto lay = new QVBoxLayout(this);
+
+        lay->addWidget(new QLabel(QString("共 %1 个元素, 每行一个值:").arg(count)));
+
+        m_table = new QTableWidget(count, 2);
+        m_table->setHorizontalHeaderLabels({"索引", "值"});
+        m_table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+        m_table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+        for (int i = 0; i < count; ++i) {
+            auto idxItem = new QTableWidgetItem(QString::number(i));
+            idxItem->setFlags(Qt::NoItemFlags);
+            idxItem->setBackground(QColor(240, 240, 240));
+            m_table->setItem(i, 0, idxItem);
+            m_table->setItem(i, 1, new QTableWidgetItem(i < values.size() ? values[i] : ""));
+        }
+        lay->addWidget(m_table);
+
+        auto fillLay = new QHBoxLayout;
+        fillLay->addWidget(new QLabel("全部填充为:"));
+        m_fillEdit = new QLineEdit;
+        fillLay->addWidget(m_fillEdit);
+        auto fillBtn = new QPushButton("填充");
+        fillLay->addWidget(fillBtn);
+        lay->addLayout(fillLay);
+        connect(fillBtn, &QPushButton::clicked, [this]() {
+            QString v = m_fillEdit->text();
+            for (int i = 0; i < m_table->rowCount(); ++i)
+                m_table->item(i, 1)->setText(v);
+        });
+
+        // 序列填充(等差/线性)
+        auto seqLay = new QHBoxLayout;
+        seqLay->addWidget(new QLabel("序列: 起="));
+        m_seqStart = new QLineEdit; m_seqStart->setMaximumWidth(70);
+        seqLay->addWidget(m_seqStart);
+        seqLay->addWidget(new QLabel("步="));
+        m_seqStep = new QLineEdit; m_seqStep->setMaximumWidth(70);
+        seqLay->addWidget(m_seqStep);
+        auto seqBtn = new QPushButton("生成序列");
+        seqLay->addWidget(seqBtn);
+        seqLay->addStretch();
+        lay->addLayout(seqLay);
+        connect(seqBtn, &QPushButton::clicked, [this]() {
+            bool ok1, ok2;
+            double start = m_seqStart->text().toDouble(&ok1);
+            double step = m_seqStep->text().toDouble(&ok2);
+            if (!ok1 || !ok2) return;
+            for (int i = 0; i < m_table->rowCount(); ++i) {
+                double v = start + step * i;
+                m_table->item(i, 1)->setText(QString::number(v));
+            }
+        });
+
+        auto btnLay = new QHBoxLayout;
+        btnLay->addStretch();
+        auto ok = new QPushButton("确定");
+        auto cancel = new QPushButton("取消");
+        btnLay->addWidget(ok);
+        btnLay->addWidget(cancel);
+        lay->addLayout(btnLay);
+        connect(ok, &QPushButton::clicked, this, &QDialog::accept);
+        connect(cancel, &QPushButton::clicked, this, &QDialog::reject);
+    }
+
+    QStringList values() const
+    {
+        QStringList r;
+        for (int i = 0; i < m_table->rowCount(); ++i)
+            r << m_table->item(i, 1)->text();
+        return r;
+    }
+
+private:
+    QTableWidget *m_table;
+    QLineEdit *m_fillEdit;
+    QLineEdit *m_seqStart;
+    QLineEdit *m_seqStep;
+};
+
+ProtocolEditDialog::ProtocolEditDialog(ProtocolConfig &proto, QVector<ProtocolConfig> *allProtocols, QWidget *parent)
+    : QDialog(parent), m_proto(proto), m_allProtocols(allProtocols), m_loading(false), wheelFilter(new WheelEventFilter(this))
 {
     setupUi();
     loadProtocol();
@@ -49,6 +144,12 @@ void ProtocolEditDialog::setupUi()
     pushLayout->addWidget(m_activePushCheck);
     pushLayout->addWidget(new QLabel("周期(ms):"));
     pushLayout->addWidget(m_pushIntervalSpin);
+    pushLayout->addWidget(new QLabel("  固定帧长度:"));
+    m_fixedFrameLenSpin = new QSpinBox;
+    m_fixedFrameLenSpin->setRange(0, 999999);
+    m_fixedFrameLenSpin->setValue(0);
+    m_fixedFrameLenSpin->setToolTip("0=根据参数自动计算帧长度\n>0=手动指定整帧字节数(数据区未配齐时使用)");
+    pushLayout->addWidget(m_fixedFrameLenSpin);
     pushLayout->addStretch();
     mainLayout->addLayout(pushLayout);
 
@@ -57,6 +158,7 @@ void ProtocolEditDialog::setupUi()
         onParamChanged();
     });
     connect(m_pushIntervalSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &ProtocolEditDialog::onParamChanged);
+    connect(m_fixedFrameLenSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &ProtocolEditDialog::onParamChanged);
     connect(m_nameEdit, &QLineEdit::textChanged, this, &ProtocolEditDialog::onParamChanged);
     connect(m_descEdit, &QLineEdit::textChanged, this, &ProtocolEditDialog::onParamChanged);
 
@@ -71,12 +173,9 @@ void ProtocolEditDialog::setupUi()
     auto hdrGroup = new CollapsibleGroupBox("帧头参数 (右键支持复制/粘贴)");
     auto hdrContent = new QWidget;
     auto hdrLayout = new QVBoxLayout(hdrContent);
-    //    m_headerTable = new QTableWidget(0, 10);
-    //    m_headerTable->setHorizontalHeaderLabels({"名称","类型","字节序","默认值","动态类型","动态参数","匹配","匹配模式","匹配值","匹配值2"});
-    m_headerTable = new QTableWidget(0, 10);
-    m_headerTable->setHorizontalHeaderLabels({"名称","类型","字节序","数组","默认值","动态类型","动态参数","匹配","匹配模式","匹配值","匹配值2"});
-
-    for (int i = 0; i < 10; ++i)
+    m_headerTable = new QTableWidget(0, 11);
+    m_headerTable->setHorizontalHeaderLabels({"名称","类型","字节序/长度","数组","默认值","动态类型","动态参数","匹配","匹配模式","匹配值","匹配值2"});
+    for (int i = 0; i < 11; ++i)
         m_headerTable->horizontalHeader()->setSectionResizeMode(i, QHeaderView::Stretch);
     m_headerTable->setContextMenuPolicy(Qt::CustomContextMenu);
     hdrLayout->addWidget(m_headerTable);
@@ -95,8 +194,8 @@ void ProtocolEditDialog::setupUi()
     auto dataContent = new QWidget;
     auto dataLayout = new QVBoxLayout(dataContent);
     m_dataTable = new QTableWidget(0, 11);
-    m_dataTable->setHorizontalHeaderLabels({"名称","类型","字节序","数组","默认值","动态类型","动态参数","匹配","匹配模式","匹配值","匹配值2"});
-    for (int i = 0; i < 10; ++i)
+    m_dataTable->setHorizontalHeaderLabels({"名称","类型","字节序/长度","数组","默认值","动态类型","动态参数","匹配","匹配模式","匹配值","匹配值2"});
+    for (int i = 0; i < 11; ++i)
         m_dataTable->horizontalHeader()->setSectionResizeMode(i, QHeaderView::Stretch);
     m_dataTable->setContextMenuPolicy(Qt::CustomContextMenu);
     dataLayout->addWidget(m_dataTable);
@@ -114,25 +213,28 @@ void ProtocolEditDialog::setupUi()
     auto btnCopyHeader = new QPushButton("复制帧头到回复帧头");
     auto btnCopyData = new QPushButton("复制数据区到回复数据区");
     auto btnCopyAll = new QPushButton("复制全部接收配置到回复");
-    auto btnSwapByteOrder = new QPushButton("一键切换所有字段大小端");
     copyBtnLayout->addWidget(btnCopyHeader);
     copyBtnLayout->addWidget(btnCopyData);
     copyBtnLayout->addWidget(btnCopyAll);
-    copyBtnLayout->addWidget(btnSwapByteOrder);
     copyBtnLayout->addStretch();
     recvLayout->addLayout(copyBtnLayout);
 
-    //    auto utilBtnLayout = new QHBoxLayout;
-
-    //    utilBtnLayout->addWidget(btnSwapByteOrder);
-    //    utilBtnLayout->addStretch();
-    //    recvLayout->addLayout(utilBtnLayout);
-
+    auto utilBtnLayout = new QHBoxLayout;
+    auto btnSwapByteOrder = new QPushButton("一键切换所有字段大小端");
+    utilBtnLayout->addWidget(btnSwapByteOrder);
+    utilBtnLayout->addStretch();
+    recvLayout->addLayout(utilBtnLayout);
 
     tabWidget->addTab(recvTab, "接收协议配置");
 
+    // ====== Tab2: 操作配置 ======
     auto actionTab = new QWidget;
     auto actionLayout = new QVBoxLayout(actionTab);
+
+    m_stopAllCheck = new QCheckBox("匹配成功时停止所有周期回复");
+    m_stopAllCheck->setToolTip("勾选后，该协议匹配成功时会停止所有正在运行的周期回复");
+    actionLayout->addWidget(m_stopAllCheck);
+
     actionLayout->addWidget(new QLabel("选择要停止的周期回复协议:"));
     m_stopList = new QListWidget;
     m_stopList->setSelectionMode(QAbstractItemView::NoSelection);
@@ -147,27 +249,20 @@ void ProtocolEditDialog::setupUi()
     actionBtnLayout->addStretch();
     actionLayout->addLayout(actionBtnLayout);
 
-    tabWidget->addTab(actionTab,"操作设置");
+    tabWidget->addTab(actionTab, "操作配置");
 
-
-
-
-    connect(btnSelectAll,&QPushButton::clicked,[this]()
-    {
-        for(int i = 0;i < m_stopList->count();i++)
-        {
+    connect(btnSelectAll, &QPushButton::clicked, [this]() {
+        for (int i = 0; i < m_stopList->count(); ++i)
             m_stopList->item(i)->setCheckState(Qt::Checked);
-        }
         onParamChanged();
     });
-    connect(btnDeselectAll,&QPushButton::clicked,[this]()
-    {
-        for(int i = 0;i < m_stopList->count();i++)
-        {
+    connect(btnDeselectAll, &QPushButton::clicked, [this]() {
+        for (int i = 0; i < m_stopList->count(); ++i)
             m_stopList->item(i)->setCheckState(Qt::Unchecked);
-        }
         onParamChanged();
     });
+    connect(m_stopAllCheck, &QCheckBox::toggled, this, &ProtocolEditDialog::onParamChanged);
+    connect(m_stopList, &QListWidget::itemChanged, this, [this](QListWidgetItem *) { onParamChanged(); });
 
     connect(btnAddHdr, &QPushButton::clicked, this, &ProtocolEditDialog::onAddHeaderParam);
     connect(btnDelHdr, &QPushButton::clicked, this, &ProtocolEditDialog::onRemoveHeaderParam);
@@ -200,12 +295,12 @@ void ProtocolEditDialog::setupUi()
     replyLayout->addLayout(modeLayout);
 
     // 回复帧头参数
-    auto rplHdrGroup = new CollapsibleGroupBox("回复帧头参数 (右键支持复制/粘贴)");
+    m_rplHdrGroup = new CollapsibleGroupBox("回复帧头参数 (右键支持复制/粘贴)");
     auto rplHdrContent = new QWidget;
     auto rplHdrLayout = new QVBoxLayout(rplHdrContent);
     m_replyHeaderTable = new QTableWidget(0, 11);
-    m_replyHeaderTable->setHorizontalHeaderLabels({"名称","类型","字节序","数组","默认值","动态类型","动态参数","随机","随机最小","随机最大","随机长度"});
-    for (int i = 0; i < 10; ++i)
+    m_replyHeaderTable->setHorizontalHeaderLabels({"名称","类型","字节序/长度","数组","默认值","动态类型","动态参数","随机","随机最小","随机最大","随机长度"});
+    for (int i = 0; i < 11; ++i)
         m_replyHeaderTable->horizontalHeader()->setSectionResizeMode(i, QHeaderView::Stretch);
     m_replyHeaderTable->setContextMenuPolicy(Qt::CustomContextMenu);
     rplHdrLayout->addWidget(m_replyHeaderTable);
@@ -216,16 +311,16 @@ void ProtocolEditDialog::setupUi()
     rplHdrBtnLayout->addWidget(btnDelRplHdr);
     rplHdrBtnLayout->addStretch();
     rplHdrLayout->addLayout(rplHdrBtnLayout);
-    rplHdrGroup->setContentWidget(rplHdrContent);
-    replyLayout->addWidget(rplHdrGroup);
+    m_rplHdrGroup->setContentWidget(rplHdrContent);
+    replyLayout->addWidget(m_rplHdrGroup);
 
     // 回复数据区参数
-    auto rplDataGroup = new CollapsibleGroupBox("回复数据区参数 (右键支持复制/粘贴)");
+    m_rplDataGroup = new CollapsibleGroupBox("回复数据区参数 (右键支持复制/粘贴)");
     auto rplDataContent = new QWidget;
     auto rplDataLayout = new QVBoxLayout(rplDataContent);
     m_replyDataTable = new QTableWidget(0, 11);
-    m_replyDataTable->setHorizontalHeaderLabels({"名称","类型","字节序","数组","默认值","动态类型","动态参数","随机","随机最小","随机最大","随机长度"});
-    for (int i = 0; i < 10; ++i)
+    m_replyDataTable->setHorizontalHeaderLabels({"名称","类型","字节序/长度","数组","默认值","动态类型","动态参数","随机","随机最小","随机最大","随机长度"});
+    for (int i = 0; i < 11; ++i)
         m_replyDataTable->horizontalHeader()->setSectionResizeMode(i, QHeaderView::Stretch);
     m_replyDataTable->setContextMenuPolicy(Qt::CustomContextMenu);
     rplDataLayout->addWidget(m_replyDataTable);
@@ -236,59 +331,113 @@ void ProtocolEditDialog::setupUi()
     rplDataBtnLayout->addWidget(btnDelRplData);
     rplDataBtnLayout->addStretch();
     rplDataLayout->addLayout(rplDataBtnLayout);
-    rplDataGroup->setContentWidget(rplDataContent);
-    replyLayout->addWidget(rplDataGroup);
+    m_rplDataGroup->setContentWidget(rplDataContent);
+    replyLayout->addWidget(m_rplDataGroup);
 
     auto rplUtilLayout = new QHBoxLayout;
     auto btnRplSwap = new QPushButton("一键切换所有字段大小端");
     rplUtilLayout->addWidget(btnRplSwap);
     rplUtilLayout->addStretch();
     replyLayout->addLayout(rplUtilLayout);
+
+    // ====== 分包配置(发送区帧发送后, 按模板拆分负载, 逐包间隔下发; 支持多负载循环) ======
+    m_splitGroup = new CollapsibleGroupBox("分包配置 (发送区帧发送后, 按模板拆分负载逐包下发; 字段可关联包序号/包大小)");
+    auto splitContent = new QWidget;
+    auto splitLayout = new QVBoxLayout(splitContent);
+
+    auto splitTopLayout = new QHBoxLayout;
+    m_splitEnableCheck = new QCheckBox("启用分包");
+    splitTopLayout->addWidget(m_splitEnableCheck);
+    splitTopLayout->addWidget(new QLabel("负载字段:"));
+    m_payloadFieldCombo = new QComboBox;
+    m_payloadFieldCombo->setMinimumWidth(120);
+    splitTopLayout->addWidget(m_payloadFieldCombo);
+    splitTopLayout->addWidget(new QLabel("每包大小(bytes):"));
+    m_chunkSizeSpin = new QSpinBox;
+    m_chunkSizeSpin->setRange(0, 999999);
+    m_chunkSizeSpin->setValue(1024);
+    m_chunkSizeSpin->setToolTip("0=用负载字段的userLength");
+    splitTopLayout->addWidget(m_chunkSizeSpin);
+    splitTopLayout->addWidget(new QLabel("包间间隔(ms):"));
+    m_intervalSpin = new QSpinBox;
+    m_intervalSpin->setRange(0, 999999);
+    m_intervalSpin->setValue(100);
+    splitTopLayout->addWidget(m_intervalSpin);
+    splitTopLayout->addStretch();
+    splitLayout->addLayout(splitTopLayout);
+
+    auto splitCycleLayout = new QHBoxLayout;
+    m_cycleCheck = new QCheckBox("多负载循环(发完一个负载后, 延时后发下一个, 循环往复)");
+    splitCycleLayout->addWidget(m_cycleCheck);
+    splitCycleLayout->addWidget(new QLabel("循环间隔(ms):"));
+    m_cycleIntervalSpin = new QSpinBox;
+    m_cycleIntervalSpin->setRange(0, 999999);
+    m_cycleIntervalSpin->setValue(1000);
+    splitCycleLayout->addWidget(m_cycleIntervalSpin);
+    splitCycleLayout->addStretch();
+    splitLayout->addLayout(splitCycleLayout);
+
+    // 包模板帧头参数
+    auto splitHdrGroup = new CollapsibleGroupBox("包模板帧头参数 (可设动态类型=分包序号/分包大小/总包数; 右键复制/粘贴)");
+    auto splitHdrContent = new QWidget;
+    auto splitHdrLayout = new QVBoxLayout(splitHdrContent);
+    m_splitHdrTable = new QTableWidget(0, 11);
+    m_splitHdrTable->setHorizontalHeaderLabels({"名称","类型","字节序/长度","数组","默认值","动态类型","动态参数","随机","随机最小","随机最大","随机长度"});
+    for (int i = 0; i < 11; ++i)
+        m_splitHdrTable->horizontalHeader()->setSectionResizeMode(i, QHeaderView::Stretch);
+    m_splitHdrTable->setContextMenuPolicy(Qt::CustomContextMenu);
+    splitHdrLayout->addWidget(m_splitHdrTable);
+    auto splitHdrBtnLayout = new QHBoxLayout;
+    auto btnAddSHdr = new QPushButton("添加帧头参数");
+    auto btnDelSHdr = new QPushButton("删除选中");
+    splitHdrBtnLayout->addWidget(btnAddSHdr);
+    splitHdrBtnLayout->addWidget(btnDelSHdr);
+    splitHdrBtnLayout->addStretch();
+    splitHdrLayout->addLayout(splitHdrBtnLayout);
+    splitHdrGroup->setContentWidget(splitHdrContent);
+    splitLayout->addWidget(splitHdrGroup);
+
+    // 包模板数据区参数
+    auto splitDataGroup = new CollapsibleGroupBox("包模板数据区参数 (其中一个字段设为负载字段; 右键复制/粘贴)");
+    auto splitDataContent = new QWidget;
+    auto splitDataLayout = new QVBoxLayout(splitDataContent);
+    m_splitDataTable = new QTableWidget(0, 11);
+    m_splitDataTable->setHorizontalHeaderLabels({"名称","类型","字节序/长度","数组","默认值","动态类型","动态参数","随机","随机最小","随机最大","随机长度"});
+    for (int i = 0; i < 11; ++i)
+        m_splitDataTable->horizontalHeader()->setSectionResizeMode(i, QHeaderView::Stretch);
+    m_splitDataTable->setContextMenuPolicy(Qt::CustomContextMenu);
+    splitDataLayout->addWidget(m_splitDataTable);
+    auto splitDataBtnLayout = new QHBoxLayout;
+    auto btnAddSData = new QPushButton("添加数据区参数");
+    auto btnDelSData = new QPushButton("删除选中");
+    splitDataBtnLayout->addWidget(btnAddSData);
+    splitDataBtnLayout->addWidget(btnDelSData);
+    splitDataBtnLayout->addStretch();
+    splitDataLayout->addLayout(splitDataBtnLayout);
+    splitDataGroup->setContentWidget(splitDataContent);
+    splitLayout->addWidget(splitDataGroup);
+
+    // 负载数据列表
+    auto splitPayloadLayout = new QHBoxLayout;
+    m_payloadList = new QListWidget;
+    m_payloadList->setMaximumHeight(100);
+    m_payloadList->setAlternatingRowColors(true);
+    splitPayloadLayout->addWidget(m_payloadList);
+    auto payloadBtnLayout = new QVBoxLayout;
+    auto btnAddPayload = new QPushButton("添加负载(粘贴Hex)");
+    auto btnLoadFile = new QPushButton("从文件加载");
+    auto btnDelPayload = new QPushButton("删除选中");
+    payloadBtnLayout->addWidget(btnAddPayload);
+    payloadBtnLayout->addWidget(btnLoadFile);
+    payloadBtnLayout->addWidget(btnDelPayload);
+    payloadBtnLayout->addStretch();
+    splitPayloadLayout->addLayout(payloadBtnLayout);
+    splitLayout->addLayout(splitPayloadLayout);
+
+    m_splitGroup->setContentWidget(splitContent);
+    replyLayout->addWidget(m_splitGroup);
+
     tabWidget->addTab(replyTab, "回复配置");
-
-    auto subPackTab = new QWidget;
-    auto subPackHLayout = new QHBoxLayout;
-    auto subPackTabLayout = new QHBoxLayout;
-    auto subPackLayout = new QVBoxLayout(subPackTab);
-    m_subPackCheckBox = new QCheckBox("是否分包");
-    m_subPackTabWidget = new QTabWidget;
-    auto btnAdd = new QPushButton("添加包");
-    auto btnRemove = new QPushButton("删除包");
-    auto btnAddSubPackData = new QPushButton("添加参数");
-    auto btnRemoveSubPackData = new QPushButton("删除选中");
-    subPackTabLayout->addWidget(btnAddSubPackData);
-    subPackTabLayout->addWidget(btnRemoveSubPackData);
-    subPackTabLayout->addStretch();
-
-    subPackHLayout->addWidget(m_subPackCheckBox);
-//    subPackHLayout->addSpacing(50);
-    subPackHLayout->addStretch();
-    subPackHLayout->addWidget(btnAdd);
-    subPackHLayout->addWidget(btnRemove);
-
-    subPackLayout->addLayout(subPackHLayout,0);
-    subPackLayout->addWidget(m_subPackTabWidget,1);
-    subPackLayout->addLayout(subPackTabLayout,2);
-
-    subPackLayout->addStretch();
-    tabWidget->addTab(subPackTab, "分包配置");
-    connect(btnAdd, &QPushButton::clicked, [this]() {
-        QTableWidget* tableWidget = new QTableWidget(0, 11);
-        tableWidget->setHorizontalHeaderLabels({"名称","类型","字节序","数组","默认值","动态类型","动态参数","随机","随机最小","随机最大","随机长度"});
-        m_subPackTabWidget->addTab(tableWidget,QString::number(m_subPackTabWidget->count() + 1));
-    });
-    connect(btnRemove, &QPushButton::clicked, [this]() {
-        int index = m_subPackTabWidget->currentIndex();
-        for(int i = (index+1);i<m_subPackTabWidget->count();i++)
-        {
-            m_subPackTabWidget->setTabText(i,QString::number(i));
-        }
-        m_subPackTabWidget->removeTab(index);
-    });
-    connect(btnAddSubPackData, &QPushButton::clicked, [this]() {
-        addParamRow(static_cast<QTableWidget*>(m_subPackTabWidget->currentWidget()), true);
-        updatePreview();
-    });
 
     connect(btnAddRplHdr, &QPushButton::clicked, this, &ProtocolEditDialog::onAddReplyHeaderParam);
     connect(btnDelRplHdr, &QPushButton::clicked, this, &ProtocolEditDialog::onRemoveReplyHeaderParam);
@@ -296,9 +445,27 @@ void ProtocolEditDialog::setupUi()
     connect(btnDelRplData, &QPushButton::clicked, this, &ProtocolEditDialog::onRemoveReplyDataParam);
     connect(m_replyModeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &ProtocolEditDialog::onReplyModeChanged);
     connect(m_replyIntervalSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &ProtocolEditDialog::onParamChanged);
-    connect(btnRplSwap,&QPushButton::clicked,this,&ProtocolEditDialog::onSwapByteOrder);
+    connect(btnRplSwap, &QPushButton::clicked, this, &ProtocolEditDialog::onSwapByteOrder);
+
     connect(m_replyHeaderTable, &QTableWidget::customContextMenuRequested, this, &ProtocolEditDialog::onReplyHeaderTableContextMenu);
     connect(m_replyDataTable, &QTableWidget::customContextMenuRequested, this, &ProtocolEditDialog::onReplyDataTableContextMenu);
+
+    // 分包配置信号连接
+    connect(m_splitEnableCheck, &QCheckBox::toggled, this, &ProtocolEditDialog::onParamChanged);
+    connect(m_payloadFieldCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &ProtocolEditDialog::onPayloadFieldChanged);
+    connect(m_chunkSizeSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &ProtocolEditDialog::onParamChanged);
+    connect(m_intervalSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &ProtocolEditDialog::onParamChanged);
+    connect(m_cycleCheck, &QCheckBox::toggled, this, &ProtocolEditDialog::onParamChanged);
+    connect(m_cycleIntervalSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &ProtocolEditDialog::onParamChanged);
+    connect(btnAddSHdr, &QPushButton::clicked, this, &ProtocolEditDialog::onAddSplitHdr);
+    connect(btnDelSHdr, &QPushButton::clicked, this, &ProtocolEditDialog::onRemoveSplitHdr);
+    connect(btnAddSData, &QPushButton::clicked, this, &ProtocolEditDialog::onAddSplitData);
+    connect(btnDelSData, &QPushButton::clicked, this, &ProtocolEditDialog::onRemoveSplitData);
+    connect(m_splitHdrTable, &QTableWidget::customContextMenuRequested, this, &ProtocolEditDialog::onSplitHdrTableContextMenu);
+    connect(m_splitDataTable, &QTableWidget::customContextMenuRequested, this, &ProtocolEditDialog::onSplitDataTableContextMenu);
+    connect(btnAddPayload, &QPushButton::clicked, this, &ProtocolEditDialog::onAddPayload);
+    connect(btnLoadFile, &QPushButton::clicked, this, &ProtocolEditDialog::onLoadPayloadFromFile);
+    connect(btnDelPayload, &QPushButton::clicked, this, &ProtocolEditDialog::onRemovePayload);
 
     mainLayout->addWidget(tabWidget);
 
@@ -362,18 +529,17 @@ void ProtocolEditDialog::loadProtocol()
     m_activePushCheck->setChecked(m_proto.isActivePush);
     m_pushIntervalSpin->setValue(m_proto.pushIntervalMs);
     m_pushIntervalSpin->setEnabled(m_proto.isActivePush);
+    m_fixedFrameLenSpin->setValue(m_proto.fixedFrameLength);
+    m_stopAllCheck->setChecked(m_proto.stopAllPeriodicOnMatch);
 
-
+    // 填充操作配置列表(场景中其他有周期回复的协议)
     m_stopList->clear();
-    if(m_allProtocols)
-    {
-        for(const ProtocolConfig &proto : *m_allProtocols)
-        {
-            if(proto.name == m_proto.name) continue;
-            if(proto.replyConfig.mode == ReplyMode::Periodic1s ||
-               proto.replyConfig.mode == ReplyMode::Periodic5s ||
-               proto.replyConfig.mode == ReplyMode::PeriodicCustom)
-            {
+    if (m_allProtocols) {
+        for (const auto &proto : *m_allProtocols) {
+            if (proto.name == m_proto.name) continue; // 跳过自身
+            if (proto.replyConfig.mode == ReplyMode::Periodic1s ||
+                proto.replyConfig.mode == ReplyMode::Periodic5s ||
+                proto.replyConfig.mode == ReplyMode::PeriodicCustom) {
                 auto item = new QListWidgetItem(proto.name);
                 item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
                 item->setCheckState(m_proto.stopPeriodicProtocolNames.contains(proto.name)
@@ -382,6 +548,7 @@ void ProtocolEditDialog::loadProtocol()
             }
         }
     }
+
     // 帧头参数
     m_headerTable->setRowCount(0);
     for (const auto &p : m_proto.headerParams) {
@@ -398,8 +565,9 @@ void ProtocolEditDialog::loadProtocol()
         populateParamRow(m_dataTable, row, p, false);
     }
 
-    // 回复模式
+    // 回复模式(兼容旧MultiPacket配置: 映射为Once, 分包由分包配置区承载)
     int modeIdx = (int)m_proto.replyConfig.mode;
+    if (modeIdx == (int)ReplyMode::MultiPacket) modeIdx = (int)ReplyMode::Once;
     m_replyModeCombo->setCurrentIndex(modeIdx);
     m_replyIntervalSpin->setValue(m_proto.replyConfig.customIntervalMs);
     onReplyModeChanged(modeIdx);
@@ -420,57 +588,40 @@ void ProtocolEditDialog::loadProtocol()
         populateParamRow(m_replyDataTable, row, p, true);
     }
 
+    // 分包配置加载
+    loadSplitConfig();
+
     m_loading = false;
 
     updateMatchHighlight(m_headerTable);
     updateMatchHighlight(m_dataTable);
 }
+
 static bool isRawByteType(ParamType type)
 {
-    return type == ParamType::Hex || type == ParamType::Bytes || type == ParamType::String || type == ParamType::StringUtf8;
+    return type == ParamType::Hex || type == ParamType::Bytes ||
+           type == ParamType::String || type == ParamType::StringUtf8;
 }
+
 void ProtocolEditDialog::populateParamRow(QTableWidget *table, int row, const ProtocolParam &param, bool isReplyTable)
 {
     // 名称 (0)
     auto *itemName = new QTableWidgetItem(param.name);
     table->setItem(row, 0, itemName);
 
-    // 类型 (1)
-    auto typeCombo = new QComboBox;
-    typeCombo->installEventFilter(wheelFilter);
-    typeCombo->setFocusPolicy(Qt::StrongFocus);
-    for (int i = 0; i <= (int)ParamType::Hex; ++i)
-        typeCombo->addItem(ProtocolParam::typeToString((ParamType)i));
-    typeCombo->setCurrentIndex((int)param.type);
-    table->setCellWidget(row, 1, typeCombo);
-    connect(typeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &ProtocolEditDialog::onParamChanged);
-
-    //    // 字节序 (2)
-    //    auto orderCombo = new QComboBox;
-    //    orderCombo->installEventFilter(wheelFilter);
-    //    orderCombo->setFocusPolicy(Qt::StrongFocus);
-    //    orderCombo->addItem("BigEndian");
-    //    orderCombo->addItem("LittleEndian");
-    //    orderCombo->setCurrentIndex((int)param.byteOrder);
-    //    table->setCellWidget(row, 2, orderCombo);
-    //    connect(orderCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &ProtocolEditDialog::onParamChanged);
-    auto setupOrderOrLength = [this,table,row](ParamType t,ByteOrder order,int len)
-    {
-        if(isRawByteType(t))
-        {
+    // 字节序/长度 (2) -- 数值类型显示字节序, Hex/Bytes/String显示长度
+    auto setupOrderOrLength = [this, table, row](ParamType t, ByteOrder order, int len) {
+        if (isRawByteType(t)) {
             auto lenSpin = new QSpinBox;
-            lenSpin->setRange(0,9999);
+            lenSpin->setRange(0, 9999);
             lenSpin->setValue(len);
             lenSpin->setToolTip("0=自动(根据默认值推导)");
-            table->setCellWidget(row,2,lenSpin);
-            connect(lenSpin,QOverload<int>::of(&QSpinBox::valueChanged),this,&ProtocolEditDialog::onParamChanged);
-        }
-        else
-        {
-            // 字节序 (2)
+            table->setCellWidget(row, 2, lenSpin);
+            connect(lenSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &ProtocolEditDialog::onParamChanged);
+        } else {
             auto orderCombo = new QComboBox;
-            orderCombo->installEventFilter(wheelFilter);
             orderCombo->setFocusPolicy(Qt::StrongFocus);
+            orderCombo->installEventFilter(wheelFilter);
             orderCombo->addItem("BigEndian");
             orderCombo->addItem("LittleEndian");
             orderCombo->setCurrentIndex((int)order);
@@ -478,39 +629,76 @@ void ProtocolEditDialog::populateParamRow(QTableWidget *table, int row, const Pr
             connect(orderCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &ProtocolEditDialog::onParamChanged);
         }
     };
-    setupOrderOrLength(param.type,param.byteOrder,param.userLength);
-    connect(typeCombo,QOverload<int>::of(&QComboBox::currentIndexChanged), [this,table,row,setupOrderOrLength](int idx)
-    {
+    setupOrderOrLength(param.type, param.byteOrder, param.userLength);
+
+    // 类型 (1)
+    auto typeCombo = new QComboBox;
+    typeCombo->setFocusPolicy(Qt::StrongFocus);
+    typeCombo->installEventFilter(wheelFilter);
+    for (int i = 0; i <= (int)ParamType::Hex; ++i)
+        typeCombo->addItem(ProtocolParam::typeToString((ParamType)i));
+    typeCombo->setCurrentIndex((int)param.type);
+    table->setCellWidget(row, 1, typeCombo);
+
+    // 类型变化时切换字节序/长度控件，然后通知参数变化
+    connect(typeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), [this, table, row, setupOrderOrLength](int idx) {
         ParamType t = (ParamType)idx;
         ByteOrder currOrder = ByteOrder::BigEndian;
         int currLen = 0;
-        if(auto oldCombo = qobject_cast<QComboBox*>(table->cellWidget(row,2)))
-        {
+        if (auto oldCombo = qobject_cast<QComboBox*>(table->cellWidget(row, 2)))
             currOrder = (ByteOrder)oldCombo->currentIndex();
-        }
-        if(auto oldSpin = qobject_cast<QSpinBox*>(table->cellWidget(row,2)))
-        {
+        if (auto oldSpin = qobject_cast<QSpinBox*>(table->cellWidget(row, 2)))
             currLen = oldSpin->value();
-        }
-        setupOrderOrLength(t,currOrder,currLen);
+        setupOrderOrLength(t, currOrder, currLen);
         onParamChanged();
     });
-    //数组 (3)
+
+    // 数组 (3)
     auto arraySpin = new QSpinBox;
-    arraySpin->setRange(1,99999);
+    arraySpin->setRange(1, 99999);
     arraySpin->setValue(param.arrayCount);
-    arraySpin->setToolTip("1=单个值，>1=同类型数组(如1600个Int16)");
-    table->setCellWidget(row,3,arraySpin);
-    connect(arraySpin,QOverload<int>::of(&QSpinBox::valueChanged),this,&ProtocolEditDialog::onParamChanged);
-    // 默认值 (4)
-    auto *itemDefault = new QTableWidgetItem(param.defaultValue);
-    table->setItem(row, 4, itemDefault);
+    arraySpin->setToolTip("1=单个值, >1=同类型数组(如1600个Int16)\n数组>1时, 默认值列变为可编辑数组控件");
+    table->setCellWidget(row, 3, arraySpin);
+    // 数组个数变化时, 切换默认值列控件(单值文本<->数组按钮)
+    connect(arraySpin, QOverload<int>::of(&QSpinBox::valueChanged), [this, table, row](int newCount) {
+        // 读取当前默认值
+        QString curVal;
+        auto btn = qobject_cast<QPushButton*>(table->cellWidget(row, 4));
+        if (btn) curVal = btn->property("arrayData").toString();
+        else if (auto it = table->item(row, 4)) curVal = it->text();
+
+        if (newCount > 1) {
+            // 从单值或已有数组转换为newCount个元素
+            QStringList vals;
+            if (curVal.trimmed().startsWith('[')) {
+                vals = ProtocolParam::parseDefaultValuesFromString(curVal);
+            } else if (!curVal.isEmpty()) {
+                for (int i = 0; i < newCount; ++i) vals << curVal;
+            }
+            QString jsonData = QJsonDocument(QJsonArray::fromStringList(vals)).toJson(QJsonDocument::Compact);
+            if (vals.isEmpty()) jsonData = "[]";
+            setupDefaultValueCell(table, row, newCount, jsonData);
+        } else {
+            // 数组转单值: 取第一个元素
+            QString singleVal = curVal;
+            if (curVal.trimmed().startsWith('[')) {
+                QStringList vals = ProtocolParam::parseDefaultValuesFromString(curVal);
+                singleVal = vals.isEmpty() ? "" : vals.first();
+            }
+            setupDefaultValueCell(table, row, 1, singleVal);
+        }
+        onParamChanged();
+    });
+    connect(arraySpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &ProtocolEditDialog::onParamChanged);
+
+    // 默认值 (4): 根据数组个数选择控件
+    setupDefaultValueCell(table, row, param.arrayCount, param.defaultValue);
 
     // 动态类型 (5)
     auto dynCombo = new QComboBox;
-    dynCombo->installEventFilter(wheelFilter);
     dynCombo->setFocusPolicy(Qt::StrongFocus);
-    for (int i = 0; i <= (int)DynamicType::Sequence; ++i)
+    dynCombo->installEventFilter(wheelFilter);
+    for (int i = 0; i <= (int)DynamicType::TotalPackets; ++i)
         dynCombo->addItem(ProtocolParam::dynamicTypeToString((DynamicType)i));
     dynCombo->setCurrentIndex((int)param.dynamicType);
     table->setCellWidget(row, 5, dynCombo);
@@ -522,6 +710,25 @@ void ProtocolEditDialog::populateParamRow(QTableWidget *table, int row, const Pr
     dynSpin->setValue(param.dynamicParam);
     table->setCellWidget(row, 6, dynSpin);
     connect(dynSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &ProtocolEditDialog::onParamChanged);
+
+    // 根据动态类型更新动态参数提示
+    auto updateDynToolTip = [dynSpin](int dynIdx) {
+        DynamicType dt = (DynamicType)dynIdx;
+        switch (dt) {
+        case DynamicType::None:         dynSpin->setToolTip(""); break;
+        case DynamicType::Timestamp:    dynSpin->setToolTip("0=秒 1=毫秒"); break;
+        case DynamicType::Length:       dynSpin->setToolTip("0=数据区长度 1=总帧长度(包头+数据区)"); break;
+        case DynamicType::Checksum:     dynSpin->setToolTip("校验和计算起始偏移"); break;
+        case DynamicType::Sequence:     dynSpin->setToolTip("保留"); break;
+        case DynamicType::PacketIndex:  dynSpin->setToolTip("分包序号(自动填充当前包索引)"); break;
+        case DynamicType::PacketSize:   dynSpin->setToolTip("分包大小(自动填充当前包负载字节数)"); break;
+        case DynamicType::TotalPackets: dynSpin->setToolTip("总包数(自动填充)"); break;
+        }
+    };
+    updateDynToolTip((int)param.dynamicType);
+    connect(dynCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), [updateDynToolTip](int idx) {
+        updateDynToolTip(idx);
+    });
 
     if (isReplyTable) {
         // 随机 (7)
@@ -556,8 +763,8 @@ void ProtocolEditDialog::populateParamRow(QTableWidget *table, int row, const Pr
 
         // 匹配模式 (8)
         auto matchModeCombo = new QComboBox;
-        matchModeCombo->installEventFilter(wheelFilter);
         matchModeCombo->setFocusPolicy(Qt::StrongFocus);
+        matchModeCombo->installEventFilter(wheelFilter);
         for (int i = 0; i <= (int)MatchMode::Any; ++i)
             matchModeCombo->addItem(ProtocolParam::matchModeToString((MatchMode)i));
         matchModeCombo->setCurrentIndex((int)param.matchMode);
@@ -583,30 +790,24 @@ ProtocolParam ProtocolEditDialog::readParamRow(QTableWidget *table, int row, boo
     auto typeCombo = qobject_cast<QComboBox*>(table->cellWidget(row, 1));
     if (typeCombo) param.type = (ParamType)typeCombo->currentIndex();
 
-    //    auto orderCombo = qobject_cast<QComboBox*>(table->cellWidget(row, 2));
-    //    if (orderCombo) param.byteOrder = (ByteOrder)orderCombo->currentIndex();
-    if(isRawByteType(param.type))
-    {
-        auto lenSpin = qobject_cast<QSpinBox*>(table->cellWidget(row,2));
-        if(lenSpin)
-        {
-            param.userLength = lenSpin->value();
-        }
-    }
-    else
-    {
-        auto orderCombo = qobject_cast<QComboBox*>(table->cellWidget(row,2));
-        if(orderCombo)
-        {
-            param.byteOrder = (ByteOrder)orderCombo->currentIndex();
-        }
+    if (isRawByteType(param.type)) {
+        auto lenSpin = qobject_cast<QSpinBox*>(table->cellWidget(row, 2));
+        if (lenSpin) param.userLength = lenSpin->value();
+    } else {
+        auto orderCombo = qobject_cast<QComboBox*>(table->cellWidget(row, 2));
+        if (orderCombo) param.byteOrder = (ByteOrder)orderCombo->currentIndex();
     }
 
-//    param.defaultValue = table->item(row, 3) ? table->item(row, 3)->text() : "";
-    auto arraySpin = qobject_cast<QSpinBox*>(table->cellWidget(row,3));
-    if(arraySpin) param.arrayCount = arraySpin->value();
+    auto arraySpin = qobject_cast<QSpinBox*>(table->cellWidget(row, 3));
+    if (arraySpin) param.arrayCount = arraySpin->value();
 
-    param.defaultValue = table->item(row,4) ? table->item(row,4)->text():"";
+    // 默认值列: 数组时是按钮(存arrayData), 单值时是文本item
+    auto defBtn = qobject_cast<QPushButton*>(table->cellWidget(row, 4));
+    if (defBtn) {
+        param.defaultValue = defBtn->property("arrayData").toString();
+    } else {
+        param.defaultValue = table->item(row, 4) ? table->item(row, 4)->text() : "";
+    }
 
     auto dynCombo = qobject_cast<QComboBox*>(table->cellWidget(row, 5));
     if (dynCombo) param.dynamicType = (DynamicType)dynCombo->currentIndex();
@@ -639,15 +840,96 @@ ProtocolParam ProtocolEditDialog::readParamRow(QTableWidget *table, int row, boo
 
 void ProtocolEditDialog::addParamRow(QTableWidget *table, bool isReplyTable)
 {
-    if(table == nullptr)
-    {
-        return;
-    }
     int row = table->rowCount();
     table->insertRow(row);
     ProtocolParam param;
     param.name = QString("参数%1").arg(row + 1);
     populateParamRow(table, row, param, isReplyTable);
+}
+
+void ProtocolEditDialog::setupDefaultValueCell(QTableWidget *table, int row, int arrayCount, const QString &defaultValue)
+{
+    // 移除并释放旧的cellWidget
+    QWidget *old = table->cellWidget(row, 4);
+    if (old) {
+        table->removeCellWidget(row, 4);
+        delete old;
+    }
+
+    if (arrayCount > 1) {
+        // 数组: 用按钮, property存JSON数组字符串
+        QString data = defaultValue;
+        if (!data.trimmed().startsWith('[')) {
+            // 旧单值转成重复N个的数组
+            QStringList vals;
+            if (!data.isEmpty())
+                for (int i = 0; i < arrayCount; ++i) vals << data;
+            data = QString::fromUtf8(QJsonDocument(QJsonArray::fromStringList(vals)).toJson(QJsonDocument::Compact));
+        }
+        // 校正数组元素个数与arrayCount一致(多截少补)
+        QStringList vals = ProtocolParam::parseDefaultValuesFromString(data);
+        while (vals.size() < arrayCount) vals << "";
+        if (vals.size() > arrayCount) vals = vals.mid(0, arrayCount);
+        data = QString::fromUtf8(QJsonDocument(QJsonArray::fromStringList(vals)).toJson(QJsonDocument::Compact));
+
+        auto btn = new QPushButton;
+        btn->setFocusPolicy(Qt::StrongFocus);
+        btn->setProperty("arrayData", data);
+        int filled = 0;
+        for (const auto &v : vals) if (!v.isEmpty()) ++filled;
+        btn->setText(QString("编辑数组(%1项,已填%2)").arg(arrayCount).arg(filled));
+        btn->setToolTip("点击编辑每个数组元素的值\n支持全部填充、序列生成");
+        table->setCellWidget(row, 4, btn);
+        // 占位item(保持背景一致/可选中)
+        if (!table->item(row, 4)) table->setItem(row, 4, new QTableWidgetItem(""));
+        table->item(row, 4)->setFlags(Qt::NoItemFlags);
+
+        connect(btn, &QPushButton::clicked, this, [this, table, row]() {
+            editArrayValues(table, row);
+        });
+    } else {
+        // 单值: 用文本item
+        auto item = table->item(row, 4);
+        if (!item) {
+            item = new QTableWidgetItem(defaultValue);
+            table->setItem(row, 4, item);
+        } else {
+            item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsEditable | Qt::ItemIsSelectable);
+            item->setText(defaultValue);
+        }
+    }
+}
+
+void ProtocolEditDialog::editArrayValues(QTableWidget *table, int row)
+{
+    auto btn = qobject_cast<QPushButton*>(table->cellWidget(row, 4));
+    if (!btn) return;
+
+    auto arraySpin = qobject_cast<QSpinBox*>(table->cellWidget(row, 3));
+    int count = arraySpin ? arraySpin->value() : 1;
+    if (count <= 1) return;
+
+    QString data = btn->property("arrayData").toString();
+    QStringList vals = ProtocolParam::parseDefaultValuesFromString(data);
+    while (vals.size() < count) vals << "";
+
+    // 取类型名用于提示
+    QString typeName = "值";
+    if (auto typeCombo = qobject_cast<QComboBox*>(table->cellWidget(row, 1)))
+        typeName = typeCombo->currentText();
+
+    ArrayEditDialog dlg(count, vals, typeName, this);
+    if (dlg.exec() == QDialog::Accepted) {
+        QStringList newVals = dlg.values();
+        while (newVals.size() < count) newVals << "";
+        if (newVals.size() > count) newVals = newVals.mid(0, count);
+        QString jsonData = QString::fromUtf8(QJsonDocument(QJsonArray::fromStringList(newVals)).toJson(QJsonDocument::Compact));
+        btn->setProperty("arrayData", jsonData);
+        int filled = 0;
+        for (const auto &v : newVals) if (!v.isEmpty()) ++filled;
+        btn->setText(QString("编辑数组(%1项,已填%2)").arg(count).arg(filled));
+        onParamChanged();
+    }
 }
 
 void ProtocolEditDialog::saveProtocol()
@@ -656,15 +938,17 @@ void ProtocolEditDialog::saveProtocol()
     m_proto.description = m_descEdit->text().trimmed();
     m_proto.isActivePush = m_activePushCheck->isChecked();
     m_proto.pushIntervalMs = m_pushIntervalSpin->value();
+    m_proto.fixedFrameLength = m_fixedFrameLenSpin->value();
+    m_proto.stopAllPeriodicOnMatch = m_stopAllCheck->isChecked();
+
+    // 保存操作配置中选中的协议
     m_proto.stopPeriodicProtocolNames.clear();
-    for(int i = 0;i < m_stopList->count();++i)
-    {
+    for (int i = 0; i < m_stopList->count(); ++i) {
         auto item = m_stopList->item(i);
-        if(item->checkState() == Qt::Checked)
-        {
+        if (item->checkState() == Qt::Checked)
             m_proto.stopPeriodicProtocolNames.append(item->text());
-        }
     }
+
     // 保存帧头参数
     m_proto.headerParams.clear();
     for (int i = 0; i < m_headerTable->rowCount(); ++i)
@@ -686,6 +970,9 @@ void ProtocolEditDialog::saveProtocol()
     m_proto.replyConfig.dataParams.clear();
     for (int i = 0; i < m_replyDataTable->rowCount(); ++i)
         m_proto.replyConfig.dataParams.append(readParamRow(m_replyDataTable, i, true));
+
+    // 保存分包配置
+    saveSplitConfig();
 }
 
 ProtocolConfig ProtocolEditDialog::getProtocol() const
@@ -750,6 +1037,225 @@ void ProtocolEditDialog::onReplyModeChanged(int index)
     bool isCustom = (index == (int)ReplyMode::PeriodicCustom);
     m_replyIntervalLabel->setVisible(isCustom);
     m_replyIntervalSpin->setVisible(isCustom);
+    // 发送区(回复帧头/数据区)与分包配置始终显示, 适用于所有回复模式
+    if (!m_loading) updatePreview();
+}
+
+// ================== 分包配置实现 ==================
+
+void ProtocolEditDialog::refreshPayloadFieldCombo()
+{
+    m_payloadFieldCombo->blockSignals(true);
+    int prev = m_payloadFieldCombo->currentIndex();
+    m_payloadFieldCombo->clear();
+    m_payloadFieldCombo->addItem("(无负载字段)", -1);
+    for (int i = 0; i < m_splitDataTable->rowCount(); ++i) {
+        // 读取字段名称
+        QString name;
+        auto nameItem = m_splitDataTable->item(i, 0);
+        if (nameItem) name = nameItem->text();
+        if (name.isEmpty()) name = QString("字段%1").arg(i);
+        m_payloadFieldCombo->addItem(QString("%1: %2").arg(i).arg(name), i);
+    }
+    // 恢复选中
+    if (prev >= 0 && prev < m_payloadFieldCombo->count())
+        m_payloadFieldCombo->setCurrentIndex(prev);
+    m_payloadFieldCombo->blockSignals(false);
+}
+
+void ProtocolEditDialog::loadSplitConfig()
+{
+    m_loading = true;
+    const PacketSplitConfig &sc = m_proto.replyConfig.splitConfig;
+    m_splitEnableCheck->setChecked(sc.enabled);
+    m_chunkSizeSpin->setValue(sc.chunkSize);
+    m_intervalSpin->setValue(sc.intervalMs);
+    m_cycleCheck->setChecked(sc.cycleEnabled);
+    m_cycleIntervalSpin->setValue(sc.cycleIntervalMs);
+
+    // 加载模板帧头
+    m_splitHdrTable->setRowCount(0);
+    for (const auto &p : sc.headerParams) {
+        int row = m_splitHdrTable->rowCount();
+        m_splitHdrTable->insertRow(row);
+        populateParamRow(m_splitHdrTable, row, p, true);
+    }
+
+    // 加载模板数据区
+    m_splitDataTable->setRowCount(0);
+    for (const auto &p : sc.dataParams) {
+        int row = m_splitDataTable->rowCount();
+        m_splitDataTable->insertRow(row);
+        populateParamRow(m_splitDataTable, row, p, true);
+    }
+
+    // 刷新负载字段下拉
+    refreshPayloadFieldCombo();
+    // 设置负载字段选中
+    int comboIdx = m_payloadFieldCombo->findData(sc.payloadFieldIndex);
+    if (comboIdx >= 0) m_payloadFieldCombo->setCurrentIndex(comboIdx);
+
+    // 加载负载列表
+    m_payloadList->clear();
+    for (int i = 0; i < sc.payloads.size(); ++i) {
+        QString text = QString("负载%1 (%2 bytes)").arg(i + 1).arg(sc.payloads[i].size());
+        m_payloadList->addItem(text);
+    }
+
+    m_loading = false;
+    updatePreview();
+}
+
+void ProtocolEditDialog::saveSplitConfig()
+{
+    PacketSplitConfig &sc = m_proto.replyConfig.splitConfig;
+    sc.enabled = m_splitEnableCheck->isChecked();
+    sc.chunkSize = m_chunkSizeSpin->value();
+    sc.intervalMs = m_intervalSpin->value();
+    sc.cycleEnabled = m_cycleCheck->isChecked();
+    sc.cycleIntervalMs = m_cycleIntervalSpin->value();
+
+    // 负载字段索引(从combobox data获取)
+    sc.payloadFieldIndex = m_payloadFieldCombo->currentData().toInt();
+
+    sc.headerParams.clear();
+    for (int i = 0; i < m_splitHdrTable->rowCount(); ++i)
+        sc.headerParams.append(readParamRow(m_splitHdrTable, i, true));
+
+    sc.dataParams.clear();
+    for (int i = 0; i < m_splitDataTable->rowCount(); ++i)
+        sc.dataParams.append(readParamRow(m_splitDataTable, i, true));
+
+    // payloads已在添加/删除时直接操作m_proto, 此处无需重复保存
+}
+
+void ProtocolEditDialog::onAddSplitHdr()
+{
+    addParamRow(m_splitHdrTable, true);
+    updatePreview();
+}
+
+void ProtocolEditDialog::onRemoveSplitHdr()
+{
+    int row = m_splitHdrTable->currentRow();
+    if (row >= 0) m_splitHdrTable->removeRow(row);
+    updatePreview();
+}
+
+void ProtocolEditDialog::onAddSplitData()
+{
+    addParamRow(m_splitDataTable, true);
+    refreshPayloadFieldCombo();
+    updatePreview();
+}
+
+void ProtocolEditDialog::onRemoveSplitData()
+{
+    int row = m_splitDataTable->currentRow();
+    if (row >= 0) {
+        m_splitDataTable->removeRow(row);
+        refreshPayloadFieldCombo();
+    }
+    updatePreview();
+}
+
+void ProtocolEditDialog::onSplitParamChanged()
+{
+    if (m_loading) return;
+    updatePreview();
+}
+
+void ProtocolEditDialog::onPayloadFieldChanged(int index)
+{
+    if (m_loading) return;
+    // 不需要额外操作, saveSplitConfig会从combo读取
+    updatePreview();
+}
+
+void ProtocolEditDialog::onAddPayload()
+{
+    // 从剪贴板粘贴Hex数据作为负载
+    QClipboard *clip = QGuiApplication::clipboard();
+    QString text = clip->text().trimmed();
+    if (text.isEmpty()) {
+        // 如果剪贴板为空, 弹出输入对话框
+        bool ok;
+        text = QInputDialog::getMultiLineText(this, "添加负载", "输入Hex数据(如: 01 02 03 FF):", "", &ok);
+        if (!ok || text.trimmed().isEmpty()) return;
+    }
+    QString s = text;
+    s.remove(' ').remove('\n').remove('\t').remove('\r');
+    if (s.startsWith("0x", Qt::CaseInsensitive)) s.remove(0, 2);
+    QByteArray payload = QByteArray::fromHex(s.toLatin1());
+    if (payload.isEmpty()) return;
+
+    m_proto.replyConfig.splitConfig.payloads.append(payload);
+    QString label = QString("负载%1 (%2 bytes)").arg(m_payloadList->count() + 1).arg(payload.size());
+    m_payloadList->addItem(label);
+    updatePreview();
+}
+
+void ProtocolEditDialog::onLoadPayloadFromFile()
+{
+    QString path = QFileDialog::getOpenFileName(this, "选择负载文件", QString(), "所有文件 (*);;二进制文件 (*.bin *.dat);;图片 (*.png *.jpg *.bmp)");
+    if (path.isEmpty()) return;
+    QFile f(path);
+    if (!f.open(QIODevice::ReadOnly)) return;
+    QByteArray payload = f.readAll();
+    f.close();
+    if (payload.isEmpty()) return;
+
+    m_proto.replyConfig.splitConfig.payloads.append(payload);
+    QFileInfo fi(path);
+    QString label = QString("负载%1: %2 (%3 bytes)")
+                    .arg(m_payloadList->count() + 1)
+                    .arg(fi.fileName())
+                    .arg(payload.size());
+    m_payloadList->addItem(label);
+    updatePreview();
+}
+
+void ProtocolEditDialog::onRemovePayload()
+{
+    int row = m_payloadList->currentRow();
+    if (row < 0) return;
+    m_proto.replyConfig.splitConfig.payloads.removeAt(row);
+    m_payloadList->takeItem(row);
+    updatePreview();
+}
+
+void ProtocolEditDialog::onSplitHdrTableContextMenu(const QPoint &pos)
+{
+    QMenu menu(this);
+    auto actCopySel = menu.addAction("复制选中行");
+    auto actCopyAll = menu.addAction("复制整表");
+    auto actPaste = menu.addAction("粘贴");
+    auto actClear = menu.addAction("清空整表");
+    auto actDel = menu.addAction("删除选中行");
+
+    QAction *selected = menu.exec(m_splitHdrTable->viewport()->mapToGlobal(pos));
+    if (selected == actCopySel) copyTableSelection(m_splitHdrTable, true);
+    else if (selected == actCopyAll) copyTableAll(m_splitHdrTable, true);
+    else if (selected == actPaste) pasteToTable(m_splitHdrTable, true);
+    else if (selected == actClear) { m_splitHdrTable->setRowCount(0); updatePreview(); }
+    else if (selected == actDel) onRemoveSplitHdr();
+}
+
+void ProtocolEditDialog::onSplitDataTableContextMenu(const QPoint &pos)
+{
+    QMenu menu(this);
+    auto actCopySel = menu.addAction("复制选中行");
+    auto actCopyAll = menu.addAction("复制整表");
+    auto actPaste = menu.addAction("粘贴");
+    auto actClear = menu.addAction("清空整表");
+    auto actDel = menu.addAction("删除选中行");
+
+    QAction *selected = menu.exec(m_splitDataTable->viewport()->mapToGlobal(pos));
+    if (selected == actCopySel) copyTableSelection(m_splitDataTable, true);
+    else if (selected == actCopyAll) copyTableAll(m_splitDataTable, true);
+    else if (selected == actPaste) pasteToTable(m_splitDataTable, true);
+    else if (selected == actClear) { m_splitDataTable->setRowCount(0); refreshPayloadFieldCombo(); updatePreview(); }
+    else if (selected == actDel) onRemoveSplitData();
 }
 
 void ProtocolEditDialog::onPreviewTimer()
@@ -842,6 +1348,8 @@ void ProtocolEditDialog::onSwapByteOrder()
     swapTable(m_dataTable);
     swapTable(m_replyHeaderTable);
     swapTable(m_replyDataTable);
+    swapTable(m_multiHdrTable);
+    swapTable(m_multiDataTable);
     m_loading = false;
     updatePreview();
 }
@@ -921,7 +1429,7 @@ void ProtocolEditDialog::onReplyDataTableContextMenu(const QPoint &pos)
 QByteArray ProtocolEditDialog::paramsToClipboardData(const QVector<ProtocolParam> &params, bool isReplyTable)
 {
     QJsonArray arr;
-    for (const ProtocolParam &p : params) {
+    for (const auto &p : params) {
         QJsonObject obj;
         obj["name"] = p.name;
         obj["type"] = (int)p.type;
@@ -1080,15 +1588,16 @@ void ProtocolEditDialog::updatePreview()
     QString detail = "<pre style='font-family: monospace; font-size: 13px; margin: 0;'>";
     int offset = 0;
     detail += "<b>帧头:</b><br>";
-    for (const ProtocolParam &p : m_proto.headerParams) {
+    for (const auto &p : m_proto.headerParams) {
         int sz = p.byteSize();
         QByteArray fieldData = frame.mid(offset, sz);
         QString fieldHex = QString::fromLatin1(fieldData.toHex(' '));
+
         QString arrayInfo;
-        if(p.arrayCount > 1)
-        {
-            arrayInfo = QString("<font color='teal'> (%1[%2]) </font>").arg(ProtocolParam::typeToString(p.type)).arg(p.arrayCount);
-        }
+        if (p.arrayCount > 1)
+            arrayInfo = QString("<font color='teal'> (%1[%2]) </font>")
+                        .arg(ProtocolParam::typeToString(p.type)).arg(p.arrayCount);
+
         QString matchInfo;
         QString bgStyle;
         if (p.matchEnabled) {
@@ -1097,31 +1606,32 @@ void ProtocolEditDialog::updatePreview()
             matchInfo = QString("<font color='green'> [匹配:%1]</font>").arg(matchModeStr);
             if (p.matchMode == MatchMode::Range) {
                 matchInfo += QString("<font color='blue'> 期望范围:[%2, %3]</font>")
-                        .arg(p.matchValue).arg(p.matchValue2);
+                             .arg(p.matchValue).arg(p.matchValue2);
             } else if (p.matchMode == MatchMode::Mask) {
                 matchInfo += QString("<font color='blue'> 掩码:%2 期望:%3</font>")
-                        .arg(p.matchValue).arg(p.matchValue2);
+                             .arg(p.matchValue).arg(p.matchValue2);
             } else if (!p.matchValue.isEmpty()) {
                 matchInfo += QString("<font color='blue'> 期望:%2</font>").arg(p.matchValue);
             }
         }
 
         detail += QString("<span%1>  偏移:%2  %3 (%4)  %5字节  值:%6%7%8</span><br>")
-                .arg(bgStyle).arg(offset).arg(p.name)
-                .arg(ProtocolParam::typeToString(p.type))
-                .arg(sz).arg(fieldHex).arg(arrayInfo).arg(matchInfo);
+                  .arg(bgStyle).arg(offset).arg(p.name)
+                  .arg(ProtocolParam::typeToString(p.type))
+                  .arg(sz).arg(fieldHex).arg(arrayInfo).arg(matchInfo);
         offset += sz;
     }
     detail += "<b>数据区:</b><br>";
-    for (const ProtocolParam &p : m_proto.dataParams) {
+    for (const auto &p : m_proto.dataParams) {
         int sz = p.byteSize();
         QByteArray fieldData = frame.mid(offset, sz);
         QString fieldHex = QString::fromLatin1(fieldData.toHex(' '));
+
         QString arrayInfo;
-        if(p.arrayCount > 1)
-        {
-            arrayInfo = QString("<font color='teal'> (%1[%2]) </font>").arg(ProtocolParam::typeToString(p.type)).arg(p.arrayCount);
-        }
+        if (p.arrayCount > 1)
+            arrayInfo = QString("<font color='teal'> (%1[%2]) </font>")
+                        .arg(ProtocolParam::typeToString(p.type)).arg(p.arrayCount);
+
         QString matchInfo;
         QString bgStyle;
         if (p.matchEnabled) {
@@ -1130,84 +1640,138 @@ void ProtocolEditDialog::updatePreview()
             matchInfo = QString("<font color='green'> [匹配:%1]</font>").arg(matchModeStr);
             if (p.matchMode == MatchMode::Range) {
                 matchInfo += QString("<font color='blue'> 期望范围:[%2, %3]</font>")
-                        .arg(p.matchValue).arg(p.matchValue2);
+                             .arg(p.matchValue).arg(p.matchValue2);
             } else if (p.matchMode == MatchMode::Mask) {
                 matchInfo += QString("<font color='blue'> 掩码:%2 期望:%3</font>")
-                        .arg(p.matchValue).arg(p.matchValue2);
+                             .arg(p.matchValue).arg(p.matchValue2);
             } else if (!p.matchValue.isEmpty()) {
                 matchInfo += QString("<font color='blue'> 期望:%2</font>").arg(p.matchValue);
             }
         }
 
         detail += QString("<span%1>  偏移:%2  %3 (%4)  %5字节  值:%6%7%8</span><br>")
-                .arg(bgStyle).arg(offset).arg(p.name)
-                .arg(ProtocolParam::typeToString(p.type))
-                .arg(sz).arg(fieldHex).arg(arrayInfo).arg(matchInfo);
+                  .arg(bgStyle).arg(offset).arg(p.name)
+                  .arg(ProtocolParam::typeToString(p.type))
+                  .arg(sz).arg(fieldHex).arg(arrayInfo).arg(matchInfo);
         offset += sz;
     }
     detail += QString("<br><b>完整帧 (%1字节):</b> %2").arg(frame.size()).arg(hex);
+    if (m_proto.fixedFrameLength > 0)
+        detail += QString("<br><font color='orange'>固定帧长度: %1字节 (匹配时按此长度消费buffer)</font>").arg(m_proto.fixedFrameLength);
     detail += "</pre>";
     m_previewLabel->setText(detail);
 
     // 构建回复帧预览 (HTML格式)
-    QByteArray replyFrame = m_proto.buildReplyFrame(0);
-    QString replyHex = QString::fromLatin1(replyFrame.toHex(' '));
-
     QString replyDetail = "<pre style='font-family: monospace; font-size: 13px; margin: 0;'>";
-    int roffset = 0;
-    for (const auto &p : m_proto.replyConfig.headerParams) {
-        int sz = p.isRandom ? p.randomLength : p.byteSize();
-        if (sz <= 0) sz = p.byteSize();
-        QByteArray fieldData = replyFrame.mid(roffset, sz);
-        QString arrayInfo;
-        if(p.arrayCount > 1)
-        {
-            arrayInfo = QString("<font color='teal'> (%1[%2]) </font>").arg(ProtocolParam::typeToString(p.type)).arg(p.arrayCount);
-        }
-        QString randInfo;
-        QString bgStyle;
-        if (p.isRandom) {
-            bgStyle = " style='background-color: #E3F2FD;'";
-            randInfo = QString("<font color='orange'> [随机]</font>");
-            if (!p.randomMin.isEmpty() || !p.randomMax.isEmpty()) {
-                randInfo += QString("<font color='purple'> 范围:[%1, %2]</font>")
-                        .arg(p.randomMin.isEmpty() ? "0" : p.randomMin)
-                        .arg(p.randomMax.isEmpty() ? "max" : p.randomMax);
-            }
-        }
 
-        replyDetail += QString("<span%1>  偏移:%2  %3  值:%4%5%6</span><br>")
-                .arg(bgStyle).arg(roffset).arg(p.name)
-                .arg(QString::fromLatin1(fieldData.toHex(' '))).arg(arrayInfo).arg(randInfo);
-        roffset += sz;
-    }
-    for (const auto &p : m_proto.replyConfig.dataParams) {
-        int sz = p.isRandom ? p.randomLength : p.byteSize();
-        if (sz <= 0) sz = p.byteSize();
-        QByteArray fieldData = replyFrame.mid(roffset, sz);
-        QString arrayInfo;
-        if(p.arrayCount > 1)
-        {
-            arrayInfo = QString("<font color='teal'> (%1[%2]) </font>").arg(ProtocolParam::typeToString(p.type)).arg(p.arrayCount);
-        }
-        QString randInfo;
-        QString bgStyle;
-        if (p.isRandom) {
-            bgStyle = " style='background-color: #E3F2FD;'";
-            randInfo = QString("<font color='orange'> [随机]</font>");
-            if (!p.randomMin.isEmpty() || !p.randomMax.isEmpty()) {
-                randInfo += QString("<font color='purple'> 范围:[%1, %2]</font>")
-                        .arg(p.randomMin.isEmpty() ? "0" : p.randomMin)
-                        .arg(p.randomMax.isEmpty() ? "max" : p.randomMax);
-            }
-        }
+    // 生成单个帧的字段明细HTML
+    auto buildFrameDetail = [](const QByteArray &frame, const QVector<ProtocolParam> &hdrParams,
+                               const QVector<ProtocolParam> &dataParams) -> QString {
+        QString s;
+        int roffset = 0;
+        s += "<b>帧头:</b><br>";
+        for (const auto &p : hdrParams) {
+            int sz = p.isRandom ? p.randomLength : p.byteSize();
+            if (sz <= 0) sz = p.byteSize();
+            QByteArray fieldData = frame.mid(roffset, sz);
 
-        replyDetail += QString("<span%1>  偏移:%2  %3  值:%4%5%6</span><br>")
-                .arg(bgStyle).arg(roffset).arg(p.name)
-                .arg(QString::fromLatin1(fieldData.toHex(' '))).arg(arrayInfo).arg(randInfo);
-        roffset += sz;
+            QString arrayInfo;
+            if (p.arrayCount > 1)
+                arrayInfo = QString("<font color='teal'> (%1[%2]) </font>")
+                            .arg(ProtocolParam::typeToString(p.type)).arg(p.arrayCount);
+
+            QString randInfo;
+            QString bgStyle;
+            if (p.isRandom) {
+                bgStyle = " style='background-color: #E3F2FD;'";
+                randInfo = QString("<font color='orange'> [随机]</font>");
+                if (!p.randomMin.isEmpty() || !p.randomMax.isEmpty()) {
+                    randInfo += QString("<font color='purple'> 范围:[%1, %2]</font>")
+                                .arg(p.randomMin.isEmpty() ? "0" : p.randomMin)
+                                .arg(p.randomMax.isEmpty() ? "max" : p.randomMax);
+                }
+            }
+
+            s += QString("<span%1>  偏移:%2  %3  值:%4%5%6</span><br>")
+                 .arg(bgStyle).arg(roffset).arg(p.name)
+                 .arg(QString::fromLatin1(fieldData.toHex(' '))).arg(arrayInfo).arg(randInfo);
+            roffset += sz;
+        }
+        s += "<b>数据区:</b><br>";
+        for (const auto &p : dataParams) {
+            int sz = p.isRandom ? p.randomLength : p.byteSize();
+            if (sz <= 0) sz = p.byteSize();
+            QByteArray fieldData = frame.mid(roffset, sz);
+
+            QString arrayInfo;
+            if (p.arrayCount > 1)
+                arrayInfo = QString("<font color='teal'> (%1[%2]) </font>")
+                            .arg(ProtocolParam::typeToString(p.type)).arg(p.arrayCount);
+
+            QString randInfo;
+            QString bgStyle;
+            if (p.isRandom) {
+                bgStyle = " style='background-color: #E3F2FD;'";
+                randInfo = QString("<font color='orange'> [随机]</font>");
+                if (!p.randomMin.isEmpty() || !p.randomMax.isEmpty()) {
+                    randInfo += QString("<font color='purple'> 范围:[%1, %2]</font>")
+                                .arg(p.randomMin.isEmpty() ? "0" : p.randomMin)
+                                .arg(p.randomMax.isEmpty() ? "max" : p.randomMax);
+                }
+            }
+
+            s += QString("<span%1>  偏移:%2  %3  值:%4%5%6</span><br>")
+                 .arg(bgStyle).arg(roffset).arg(p.name)
+                 .arg(QString::fromLatin1(fieldData.toHex(' '))).arg(arrayInfo).arg(randInfo);
+            roffset += sz;
+        }
+        s += QString("<b>完整帧 (%1字节):</b> %2").arg(frame.size())
+             .arg(QString::fromLatin1(frame.toHex(' ')));
+        return s;
+    };
+
+    // 发送区(主回复帧) - 所有模式都显示
+    QByteArray replyFrame = m_proto.buildReplyFrame(0);
+    replyDetail += QString("<b>发送区(主回复帧) %1字节:</b><br>").arg(replyFrame.size());
+    replyDetail += buildFrameDetail(replyFrame, m_proto.replyConfig.headerParams, m_proto.replyConfig.dataParams);
+
+    // 分包区(发送区帧发送后, 按模板拆分负载逐包下发)
+    const auto &sc = m_proto.replyConfig.splitConfig;
+    if (!sc.enabled) {
+        replyDetail += "<br><font color='gray'>分包未启用, 仅发送发送区帧</font>";
+    } else if (sc.payloads.isEmpty()) {
+        replyDetail += "<br><font color='orange'>分包已启用但无负载数据</font>";
+    } else {
+        int chunkSz = sc.effectiveChunkSize();
+        replyDetail += QString("<br><b>分包配置: 已启用 (每包%1字节, 间隔%2ms")
+                       .arg(chunkSz).arg(sc.intervalMs);
+        if (sc.cycleEnabled)
+            replyDetail += QString(", 循环间隔%1ms").arg(sc.cycleIntervalMs);
+        replyDetail += ")</b><br>";
+
+        for (int pi = 0; pi < sc.payloads.size(); ++pi) {
+            const auto &payload = sc.payloads[pi];
+            int totalPkts = sc.calcPacketCount(payload);
+            replyDetail += QString("<br><font color='blue'><b>负载%1 (%2字节 → %3包)</b></font><br>")
+                           .arg(pi + 1).arg(payload.size()).arg(totalPkts);
+
+            // 预览前2包
+            int showCount = qMin(totalPkts, 2);
+            for (int pktIdx = 0; pktIdx < showCount; ++pktIdx) {
+                int start = pktIdx * chunkSz;
+                int len = qMin(chunkSz, payload.size() - start);
+                QByteArray chunk = payload.mid(start, len);
+                QByteArray pktFrame = sc.buildPacket(pktIdx, totalPkts, chunk, 0);
+                replyDetail += QString("<font color='green'>  包%1 (%2字节负载):</font><br>")
+                               .arg(pktIdx).arg(len);
+                replyDetail += buildFrameDetail(pktFrame, sc.headerParams, sc.dataParams);
+                replyDetail += "<br>";
+            }
+            if (totalPkts > 2)
+                replyDetail += QString("<font color='gray'>  ... (共%1包, 省略%2包)</font><br>")
+                               .arg(totalPkts).arg(totalPkts - 2);
+        }
     }
-    replyDetail += QString("<br><b>完整回复帧 (%1字节):</b> %2").arg(replyFrame.size()).arg(replyHex);
     replyDetail += "</pre>";
     m_replyPreviewLabel->setText(replyDetail);
 }
