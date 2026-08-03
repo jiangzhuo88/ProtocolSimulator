@@ -43,8 +43,14 @@ private:
     void stopAllPeriodicReplies();
     void stopPeriodicReplyByName(const QString &name);
 
-    // 多包下发: 按列表顺序逐包构建→间隔发送(发完最后一包即停; 循环由回复周期驱动)
-    void sendMultiPackets(const QSharedPointer<QVector<MultiPacketItem>> packets,
+    // 多包下发: 每包=发送区回复帧+本包多包帧, 一起发; 按列表顺序逐包间隔发送
+    // proto: 协议配置(用于构建发送区回复帧)
+    // packets: 多包列表(共享指针保活)
+    // startIndex: 当前发送的包索引
+    // seq: 当前包序列号
+    // intervalMs: 默认包间间隔(单包delayMs<=0时用此值)
+    void sendMultiPackets(const ProtocolConfig &proto,
+                          const QSharedPointer<QVector<MultiPacketItem>> packets,
                           int startIndex, quint64 seq, int intervalMs);
 };
 

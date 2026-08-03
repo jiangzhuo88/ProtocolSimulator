@@ -1713,21 +1713,23 @@ void ProtocolEditDialog::updatePreview()
     replyDetail += QString("<b>发送区(主回复帧) %1字节:</b><br>").arg(replyFrame.size());
     replyDetail += buildFrameDetail(replyFrame, m_proto.replyConfig.headerParams, m_proto.replyConfig.dataParams);
 
-    // 多包区(发送区帧发送后, 按列表顺序逐包下发)
+    // 多包闭环区(每包=发送区回复帧+本包多包帧, 一起发)
     const auto &mps = m_proto.replyConfig.multiPackets;
     if (mps.isEmpty()) {
         replyDetail += "<br><font color='gray'>无多包配置, 仅发送发送区帧</font>";
     } else {
         int total = mps.size();
-        replyDetail += QString("<br><b>多包配置: 共%1包, 间隔%2ms</b><br>")
+        replyDetail += QString("<br><b>多包闭环: 共%1包, 间隔%2ms (每包=发送区回复帧+本包多包帧)</b><br>")
                        .arg(total).arg(m_proto.replyConfig.multiPacketIntervalMs);
+        if (m_proto.replyConfig.multiPacketCycle)
+            replyDetail += "<font color='purple'><b>[多包循环已开启, 配合周期模式每轮重发]</b></font><br>";
         // 预览前3包
         int showCount = qMin(total, 3);
         for (int i = 0; i < showCount; ++i) {
             const auto &mp = mps[i];
             QByteArray pktFrame = mp.buildFrame(0, i, total);
             QString name = mp.name.isEmpty() ? QString("包%1").arg(i + 1) : mp.name;
-            replyDetail += QString("<font color='blue'><b>%1 (%2字节):</b></font><br>")
+            replyDetail += QString("<font color='blue'><b>闭环%1: 回复帧+多包帧(%2字节)</b></font><br>")
                            .arg(name).arg(pktFrame.size());
             replyDetail += buildFrameDetail(pktFrame, mp.headerParams, mp.dataParams);
             replyDetail += "<br>";

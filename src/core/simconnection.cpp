@@ -116,17 +116,18 @@ void SimConnection::tryMatch()
             ReplyMode effMode = reply.mode;
 
             if (effMode == ReplyMode::Once || effMode == ReplyMode::MultiPacket) {
-                // 1. 发送发送区(主回复帧)
-                QByteArray replyData = proto.buildReplyFrame(m_seqNumber++);
-                m_socket->write(replyData);
-                emit dataSent(replyData, addr);
-                emit logMessage(QString("[发] %1: %2").arg(addr).arg(QString::fromLatin1(replyData.toHex(' '))));
-                // 2. 多包区: 发送区帧发送后, 按列表顺序逐包下发
+                // 多包闭环模式: 每包=发送区回复帧+本包多包帧, 一起发
                 if (!reply.multiPackets.isEmpty()) {
                     auto packets = QSharedPointer<QVector<MultiPacketItem>>::create(reply.multiPackets);
-                    emit logMessage(QString("[多包] 协议 '%1' 发送区已发, 开始下发 %2 个包")
+                    emit logMessage(QString("[多包] 协议 '%1' 开始下发 %2 个闭环包")
                                     .arg(proto.name).arg(packets->size()));
-                    sendMultiPackets(packets, 0, m_seqNumber, reply.multiPacketIntervalMs);
+                    sendMultiPackets(proto, packets, 0, m_seqNumber, reply.multiPacketIntervalMs);
+                } else {
+                    // 无多包配置: 仅发发送区回复帧
+                    QByteArray replyData = proto.buildReplyFrame(m_seqNumber++);
+                    m_socket->write(replyData);
+                    emit dataSent(replyData, addr);
+                    emit logMessage(QString("[发] %1: %2").arg(addr).arg(QString::fromLatin1(replyData.toHex(' '))));
                 }
             } else if (effMode == ReplyMode::Periodic1s) {
                 startPeriodicReply(i, 1000);
@@ -181,18 +182,19 @@ void SimConnection::startPeriodicReply(int protoIndex, int intervalMs)
     auto doReply = [this, protoIndex]() {
         if (protoIndex < 0 || protoIndex >= m_protocols.size()) return;
         const ProtocolConfig &proto = m_protocols[protoIndex];
-        // 1. 发送发送区(主回复帧)
-        QByteArray replyData = proto.buildReplyFrame(m_seqNumber++);
-        m_socket->write(replyData);
         QString addr = m_socket->peerAddress().toString() + ":" + QString::number(m_socket->peerPort());
-        emit dataSent(replyData, addr);
-        emit logMessage(QString("[发] %1: %2").arg(addr).arg(QString::fromLatin1(replyData.toHex(' '))));
-        // 2. 多包区: 仅当开启多包循环时, 每个周期回到包1重发一轮(配合回复周期实现循环)
+        // 多包循环模式: 开启循环且有多包 → 每周期发N个闭环(每包=回复帧+多包帧)
+        // 否则 → 只发发送区回复帧
         if (proto.replyConfig.multiPacketCycle && !proto.replyConfig.multiPackets.isEmpty()) {
             auto packets = QSharedPointer<QVector<MultiPacketItem>>::create(proto.replyConfig.multiPackets);
-            emit logMessage(QString("[多包] 协议 '%1' 周期发送区已发, 回到包1重发 %2 个包")
+            emit logMessage(QString("[多包循环] 协议 '%1' 周期触发, 发送 %2 个闭环包")
                             .arg(proto.name).arg(packets->size()));
-            sendMultiPackets(packets, 0, m_seqNumber, proto.replyConfig.multiPacketIntervalMs);
+            sendMultiPackets(proto, packets, 0, m_seqNumber, proto.replyConfig.multiPacketIntervalMs);
+        } else {
+            QByteArray replyData = proto.buildReplyFrame(m_seqNumber++);
+            m_socket->write(replyData);
+            emit dataSent(replyData, addr);
+            emit logMessage(QString("[发] %1: %2").arg(addr).arg(QString::fromLatin1(replyData.toHex(' '))));
         }
     };
 
@@ -247,35 +249,43 @@ void SimConnection::stopPeriodicReplyByName(const QString &name)
     }
 }
 
-void SimConnection::sendMultiPackets(const QSharedPointer<QVector<MultiPacketItem>> packets,
+void SimConnection::sendMultiPackets(const ProtocolConfig &proto,
+                                     const QSharedPointer<QVector<MultiPacketItem>> packets,
                                      int startIndex, quint64 seq, int intervalMs)
 {
     if (!packets || startIndex < 0 || startIndex >= packets->size()) return;
     if (!m_socket || m_socket->state() != QAbstractSocket::ConnectedState) return;
 
     int total = packets->size();
-    const MultiPacketItem &item = packets->at(startIndex);
-    // 构建当前包帧(动态字段PacketIndex/TotalPackets/PacketSize自动填充)
-    QByteArray frame = item.buildFrame(seq, startIndex, total);
-    m_socket->write(frame);
-
     QString addr = m_socket->peerAddress().toString() + ":" + QString::number(m_socket->peerPort());
-    emit dataSent(frame, addr);
-    emit logMessage(QString("[多包发 %1/%2] %3: %4")
+
+    // 1. 发送发送区回复帧(每包都发, 构成完整闭环)
+    QByteArray replyFrame = proto.buildReplyFrame(seq);
+    m_socket->write(replyFrame);
+    emit dataSent(replyFrame, addr);
+    emit logMessage(QString("[多包闭环 %1/%2] 发送区回复帧: %3")
                     .arg(startIndex + 1).arg(total)
-                    .arg(addr).arg(QString::fromLatin1(frame.toHex(' '))));
+                    .arg(QString::fromLatin1(replyFrame.toHex(' '))));
+
+    // 2. 发送本包多包帧(动态字段PacketIndex/TotalPackets/PacketSize自动填充)
+    const MultiPacketItem &item = packets->at(startIndex);
+    QByteArray pktFrame = item.buildFrame(seq, startIndex, total);
+    m_socket->write(pktFrame);
+    emit dataSent(pktFrame, addr);
+    emit logMessage(QString("[多包闭环 %1/%2] 本包多包帧: %3")
+                    .arg(startIndex + 1).arg(total)
+                    .arg(QString::fromLatin1(pktFrame.toHex(' '))));
 
     // 序列号递增(供下一包使用)
     m_seqNumber = seq + 1;
 
     // 调度下一包
     if (startIndex + 1 < total) {
-        // 单包delayMs>0时用包级延迟, 否则用默认intervalMs
         int delay = item.delayMs > 0 ? item.delayMs : intervalMs;
         if (delay < 0) delay = 0;
         quint64 nextSeq = seq + 1;
-        QTimer::singleShot(delay, this, [this, packets, startIndex, nextSeq, intervalMs]() {
-            sendMultiPackets(packets, startIndex + 1, nextSeq, intervalMs);
+        QTimer::singleShot(delay, this, [this, proto, packets, startIndex, nextSeq, intervalMs]() {
+            sendMultiPackets(proto, packets, startIndex + 1, nextSeq, intervalMs);
         });
     }
 }
