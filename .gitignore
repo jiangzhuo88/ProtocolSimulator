@@ -5,3 +5,4 @@ ProtocolSimulator
 moc_*.cpp
 ui_*.h
 ProtocolSimulator.zip
+.uploads/
