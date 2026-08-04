@@ -612,11 +612,12 @@ void ProtocolEditDialog::setupUi()
     mpLayout->addLayout(mpMidLayout);
 
     m_multiPktGroup->setContentWidget(mpContent);
-    replyLayout->addWidget(m_multiPktGroup);
+//    replyLayout->addWidget(m_multiPktGroup);
 
     m_mpCurrentIndex = -1;
 
     tabWidget->addTab(replyTab, "回复配置");
+    tabWidget->addTab(m_multiPktGroup, "多包配置");
 
     connect(btnAddRplHdr, &QPushButton::clicked, this, &ProtocolEditDialog::onAddReplyHeaderParam);
     connect(btnDelRplHdr, &QPushButton::clicked, this, &ProtocolEditDialog::onRemoveReplyHeaderParam);

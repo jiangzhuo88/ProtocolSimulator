@@ -12,6 +12,7 @@
 #include <QDir>
 #include <QTextCursor>
 #include <QTextDocument>
+#include <QScrollBar>
 #include "ZTextEdit.h"
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent), m_server(nullptr), m_currentSceneIndex(-1)

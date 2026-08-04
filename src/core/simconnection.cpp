@@ -127,7 +127,7 @@ void SimConnection::tryMatch()
                     QByteArray replyData = proto.buildReplyFrame(m_seqNumber++);
                     m_socket->write(replyData);
                     emit dataSent(replyData, addr);
-                    emit logMessage(QString("[发] %1: %2").arg(addr).arg(QString::fromLatin1(replyData.toHex(' '))));
+                    emit logMessage(QString("[发] %1: %2").arg(addr).arg(QString::number(replyData.count())));
                 }
             } else if (effMode == ReplyMode::Periodic1s) {
                 startPeriodicReply(i, 1000);
@@ -206,7 +206,7 @@ void SimConnection::startPeriodicReply(int protoIndex, int intervalMs)
             QByteArray replyData = proto.buildReplyFrame(m_seqNumber++);
             m_socket->write(replyData);
             emit dataSent(replyData, addr);
-            emit logMessage(QString("[发] %1: %2").arg(addr).arg(QString::fromLatin1(replyData.toHex(' '))));
+            emit logMessage(QString("[发] %1: %2").arg(addr).arg(QString::number(replyData.count())));
         }
     };
 
@@ -215,7 +215,10 @@ void SimConnection::startPeriodicReply(int protoIndex, int intervalMs)
     connect(timer, &QTimer::timeout, doReply);
     timer->start(intervalMs);
 
-    m_periodicTimers.append({protoIndex, timer});
+    PeriodicReply reply;
+    reply.protocolIndex = protoIndex;
+    reply.timer = timer;
+    m_periodicTimers.append(reply);
 
     // 立即发送一次
     doReply();
@@ -295,18 +298,19 @@ void SimConnection::sendMultiPackets(const ProtocolConfig &proto,
 
     // 1. 发送发送区回复帧(每包都发, 构成完整闭环)
     //    分包模式: Length动态字段 = 回复区(包头+数据区) + 本包(包头+数据区); 不分包时extraLen=0
-    QByteArray replyFrame = proto.buildReplyFrame(seq, pktFrame.size());
-    m_socket->write(replyFrame);
-    emit dataSent(replyFrame, addr);
-    emit logMessage(QString("[多包闭环 %1/%2] 发送区回复帧: %3")
-                    .arg(startIndex + 1).arg(total)
-                    .arg(QString::fromLatin1(replyFrame.toHex(' '))));
-
-    m_socket->write(pktFrame);
-    emit dataSent(pktFrame, addr);
+    QByteArray replyFrame =  proto.buildReplyFrame(seq, pktFrame.size());
+//    m_socket->write(replyFrame);
+//    emit dataSent(replyFrame, addr);
+//    emit logMessage(QString("[多包闭环 %1/%2] 发送区回复帧: %3")
+//                    .arg(startIndex + 1).arg(total)
+//                    .arg(QString::fromLatin1(replyFrame.toHex(' '))));
+    QByteArray byteResult = replyFrame + pktFrame;
+    m_socket->write(byteResult);
+    emit dataSent(byteResult, addr);
     emit logMessage(QString("[多包闭环 %1/%2] 本包多包帧: %3")
                     .arg(startIndex + 1).arg(total)
-                    .arg(QString::fromLatin1(pktFrame.toHex(' '))));
+                    .arg(QString::number(byteResult.count())));
+//                    .arg(QString::fromLatin1(pktFrame.toHex(' '))));
 
     // 序列号递增(供下一包使用)
     m_seqNumber = seq + 1;

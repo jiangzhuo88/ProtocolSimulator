@@ -700,7 +700,7 @@ QByteArray MultiPacketItem::buildFrame(quint64 seq, int packetIndex, int totalPa
             header += p.toRandomBytes();
         } else {
             int len = dataArea.size();
-            if (p.dynamicType == DynamicType::Length && p.dynamicParam == 1)
+            if (p.dynamicType == DynamicType::Length)
                 len = dataArea.size() + headerSize;
             header += p.toBytes(seq, len, QByteArray(), packetIndex, pktSize, totalPackets);
         }
@@ -857,7 +857,7 @@ QByteArray ProtocolConfig::buildFrame(quint64 seq) const
     QByteArray header;
     for (const auto &p : headerParams) {
         int len = dataArea.size();
-        if (p.dynamicType == DynamicType::Length && p.dynamicParam == 1)
+        if (p.dynamicType == DynamicType::Length)
             len = dataArea.size() + headerSize;
         header += p.toBytes(seq, len);
     }
@@ -899,7 +899,7 @@ QByteArray ProtocolConfig::buildReplyFrame(quint64 seq, int extraLen) const
 
     // 构建回复帧头
     QByteArray header;
-    for (const auto &p : replyConfig.headerParams) {
+    for (const ProtocolParam &p : replyConfig.headerParams) {
         if (p.isRandom)
             header += p.toRandomBytes();
         else {
@@ -908,7 +908,7 @@ QByteArray ProtocolConfig::buildReplyFrame(quint64 seq, int extraLen) const
             //   dynamicParam==1 → 包头+数据区(整帧)
             //   分包模式(extraLen>0) → 上述基础值 + 本包帧字节数(本包包头+数据区)
             int len = dataArea.size();
-            if (p.dynamicType == DynamicType::Length && p.dynamicParam == 1)
+            if (p.dynamicType == DynamicType::Length)
                 len = dataArea.size() + headerSize;
             if (p.dynamicType == DynamicType::Length && extraLen > 0)
                 len += extraLen;
