@@ -14,6 +14,7 @@
 #include <QTextDocument>
 #include <QScrollBar>
 #include "ZTextEdit.h"
+#include "ZDDSMgr.h"
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent), m_server(nullptr), m_currentSceneIndex(-1)
 {
@@ -23,6 +24,17 @@ MainWindow::MainWindow(QWidget *parent)
 
     m_server = new SimTcpServer(this);
     connect(m_server, &SimTcpServer::logMessage, this, &MainWindow::onLog);
+    ZDDSMgr::getInstance()->registerStateCtrl("platSystemCtrl","SIMULATOR_CTRL_TOPIC",[this](const char* buffer,size_t len)
+    {
+//        QByteArray bytes(buffer,len);
+        stSceneStatusCtrlInfo comJamStatusControl;
+        memcpy(&comJamStatusControl, buffer, len);
+        //接收到场景后，切换场景
+        QString sceneName = QString::fromLatin1(comJamStatusControl.cSceneID);
+        controlSceneStatus(sceneName,comJamStatusControl.ucSceneRunMode == 0?false:true);
+//        for(const SceneConfig& var:m_config.scenes())
+
+    });
 
     // 启动时自动加载配置
     autoLoad();
@@ -50,6 +62,9 @@ void MainWindow::setupUi()
     m_btnEditProto = new QPushButton("编辑协议");
     m_btnCopyProto = new QPushButton("复制协议");
     m_btnDelProto = new QPushButton("删除协议");
+    m_btnTest = new QPushButton("测试");
+    m_testEdit = new QLineEdit("Scene1");
+    m_testBox = new QCheckBox();
     m_btnStart = new QPushButton("启动服务");
     m_btnStop = new QPushButton("停止服务");
     m_btnStop->setEnabled(false);
@@ -60,6 +75,9 @@ void MainWindow::setupUi()
     toolbarLayout->addWidget(m_btnCopyProto);
     toolbarLayout->addWidget(m_btnDelProto);
     toolbarLayout->addStretch();
+    toolbarLayout->addWidget(m_testEdit);
+    toolbarLayout->addWidget(m_testBox);
+    toolbarLayout->addWidget(m_btnTest);
     toolbarLayout->addWidget(m_btnStart);
     toolbarLayout->addWidget(m_btnStop);
     mainLayout->addLayout(toolbarLayout);
@@ -110,8 +128,10 @@ void MainWindow::setupUi()
     connect(m_btnEditProto, &QPushButton::clicked, this, &MainWindow::onEditProtocol);
     connect(m_btnCopyProto, &QPushButton::clicked, this, &MainWindow::onCopyProtocol);
     connect(m_btnDelProto, &QPushButton::clicked, this, &MainWindow::onDeleteProtocol);
-    connect(m_btnStart, &QPushButton::clicked, this, &MainWindow::onStartService);
+    connect(m_btnTest, &QPushButton::clicked, this, &MainWindow::onTestBtnClicked);
+    connect(m_btnStart, &QPushButton::clicked, this, QOverload<>::of(&MainWindow::onStartService));
     connect(m_btnStop, &QPushButton::clicked, this, &MainWindow::onStopService);
+    connect(m_btnTest, &QPushButton::clicked, this, &MainWindow::onTestBtnClicked);
     connect(m_sceneList, &QListWidget::currentRowChanged, this, &MainWindow::onSceneSelectionChanged);
     connect(m_protocolTable, &QTableWidget::cellDoubleClicked, this, &MainWindow::onProtocolDoubleClicked);
 }
@@ -119,10 +139,12 @@ void MainWindow::setupUi()
 void MainWindow::refreshSceneList()
 {
     m_sceneList->clear();
-    for (const auto &scene : m_config.scenes()) {
+    for (const SceneConfig &scene : m_config.scenes()) {
         QString text = QString("%1 (端口:%2, 协议:%3)")
                        .arg(scene.name).arg(scene.tcpPort).arg(scene.protocols.size());
-        m_sceneList->addItem(text);
+        QListWidgetItem* item = new QListWidgetItem(text);
+        item->setData(Qt::UserRole,scene.name);
+        m_sceneList->addItem(item);
     }
     if (m_sceneList->count() > 0 && m_currentSceneIndex < 0)
         m_sceneList->setCurrentRow(0);
@@ -269,6 +291,11 @@ void MainWindow::onProtocolDoubleClicked(int row, int)
     }
 }
 
+void MainWindow::onTestBtnClicked()
+{
+    controlSceneStatus(m_testEdit->text(),m_testBox->isChecked());
+}
+
 void MainWindow::onCopyProtocol()
 {
     int row = m_protocolTable->currentRow();
@@ -308,8 +335,17 @@ void MainWindow::onStartService()
         QMessageBox::warning(this, "提示", "请先选择一个场景");
         return;
     }
-    const SceneConfig &scene = m_config.scenes()[m_currentSceneIndex];
+    onStartService(m_currentSceneIndex);
+}
 
+void MainWindow::onStartService(int index)
+{
+    if (index < 0) {
+//        QMessageBox::warning(this, "提示", "请先选择一个场景");
+        return;
+    }
+    SceneConfig &scene = m_config.scenes()[index];
+    scene.isRunning = true;
     if (m_server->start(scene.tcpPort)) {
         m_server->setProtocols(scene.protocols);
         m_btnStart->setEnabled(false);
@@ -320,7 +356,12 @@ void MainWindow::onStartService()
 
 void MainWindow::onStopService()
 {
+    for(SceneConfig &scene :m_config.scenes())
+    {
+        scene.isRunning = false;
+    }
     m_server->stop();
+    onLog("[服务] TCP服务已停止");
     m_btnStart->setEnabled(true);
     m_btnStop->setEnabled(false);
     updateServiceStatus();
@@ -342,6 +383,29 @@ void MainWindow::autoLoad()
     if (m_config.loadScenes(dir)) {
         refreshSceneList();
         onLog(QString("[配置] 已从 %1 自动加载").arg(dir));
+    }
+}
+
+void MainWindow::controlSceneStatus(QString sceneName,bool openScene)
+{
+
+    for(int i = 0;i<m_config.scenes().count();i++)
+    {
+//        SceneConfig var = m_config.scenes()[i];
+        QString name = m_config.scenes()[i].name;
+        qDebug()<<"var.name"<<name;
+        if(name == sceneName)
+        {
+//            m_sceneList->setCurrentRow(i);
+            m_currentSceneIndex = i;
+            break;
+        }
+
+    }
+    onStopService();
+    if(openScene)
+    {
+        onStartService();
     }
 }
 
@@ -367,8 +431,13 @@ void MainWindow::onLog(const QString &msg)
 
 void MainWindow::updateServiceStatus()
 {
-    if (m_server && m_server->isRunning()) {
-        const SceneConfig &scene = m_config.scenes()[m_currentSceneIndex];
+    if(m_currentSceneIndex < 0 || m_config.scenes().count() <= m_currentSceneIndex)
+    {
+        return;
+    }
+    const SceneConfig &scene = m_config.scenes()[m_currentSceneIndex];
+    if (scene.isRunning == true) {
+
         m_statusLabel->setText(QString("服务运行中 | 场景: %1 | 端口: %2 | 客户端: %3")
                                 .arg(scene.name).arg(scene.tcpPort).arg(m_server->clientCount()));
     } else {

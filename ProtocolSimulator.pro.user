@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE QtCreatorProject>
-<!-- Written by QtCreator 4.11.0, 2026-07-30T15:01:25. -->
+<!-- Written by QtCreator 4.11.0, 2026-08-08T11:31:12. -->
 <qtcreator>
  <data>
   <variable>EnvironmentId</variable>
@@ -282,7 +282,7 @@
     </valuelist>
     <value type="int" key="PE.EnvironmentAspect.Base">2</value>
     <valuelist type="QVariantList" key="PE.EnvironmentAspect.Changes">
-     <value type="QString">LD_LIBRARY_PATH=/usr/lib/aarch64-linux-gnu:/home/30wish/dmdbms/bin:/home/30wish/dmdbms/drivers/odbc:/usr/local/unixodbc/lib/:$LD_LIBRARY_PATH</value>
+     <value type="QString">LD_LIBRARY_PATH=./:/usr/lib/aarch64-linux-gnu:/home/30wish/dmdbms/bin:/home/30wish/dmdbms/drivers/odbc:/usr/local/unixodbc/lib/:$LD_LIBRARY_PATH</value>
     </valuelist>
     <value type="QString" key="ProjectExplorer.ProjectConfiguration.Id">Qt4ProjectManager.Qt4RunConfiguration:/home/30wish/opt/ProtocolSimulator/ProtocolSimulator.pro</value>
     <value type="QString" key="ProjectExplorer.RunConfiguration.BuildKey">/home/30wish/opt/ProtocolSimulator/ProtocolSimulator.pro</value>

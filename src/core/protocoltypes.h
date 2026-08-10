@@ -206,6 +206,7 @@ struct SceneConfig {
     QString name;                           // 场景名称
     int tcpPort;                            // TCP端口
     QVector<ProtocolConfig> protocols;      // 协议列表
+    bool isRunning = false;
 
     SceneConfig() : tcpPort(8080) {}
 

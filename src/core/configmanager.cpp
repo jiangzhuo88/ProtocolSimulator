@@ -146,7 +146,7 @@ bool ConfigManager::saveScene(const QString &filepath, const SceneConfig &scene)
 }
 
 QVector<SceneConfig> &ConfigManager::scenes() { return m_scenes; }
-const QVector<SceneConfig> &ConfigManager::scenes() const { return m_scenes; }
+//const QVector<SceneConfig> &ConfigManager::scenes() const { return m_scenes; }
 
 void ConfigManager::addScene(const SceneConfig &scene) { m_scenes.append(scene); }
 

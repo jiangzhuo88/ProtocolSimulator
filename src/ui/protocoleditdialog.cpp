@@ -1086,7 +1086,8 @@ void ProtocolEditDialog::setupDefaultValueCell(QTableWidget *table, int row, int
         edit->setText(defaultValue);
         edit->setPlaceholderText("Hex(如 41542E)或文本; 大数据点右侧按钮");
         lay->addWidget(edit);
-        auto btnFile = new QPushButton("文件");
+        auto btnFile = new QToolButton();
+        btnFile->setText("...");
         btnFile->setToolTip("打开大数据编辑对话框\n- 显示当前已有hex内容\n- 可从文件加载二进制数据\n- 可选择字节范围[起始,结束)\n- 确定后按选中范围回填Hex");
         btnFile->setMaximumWidth(80);
         lay->addWidget(btnFile);
@@ -1095,7 +1096,7 @@ void ProtocolEditDialog::setupDefaultValueCell(QTableWidget *table, int row, int
         table->item(row, 4)->setFlags(Qt::NoItemFlags);
 
         connect(edit, &QLineEdit::textChanged, this, &ProtocolEditDialog::onParamChanged);
-        connect(btnFile, &QPushButton::clicked, this, [this, edit, btnFile]() {
+        connect(btnFile, &QToolButton::clicked, this, [this, edit, btnFile]() {
             // 解析QLineEdit中当前的hex内容作为对话框初始数据
             QString curHex = edit->text();
             curHex.remove(' ').remove('\n').remove('\t');

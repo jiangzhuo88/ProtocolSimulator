@@ -19,7 +19,7 @@ public:
 
     // 内存中的场景列表
     QVector<SceneConfig> &scenes();
-    const QVector<SceneConfig> &scenes() const;
+//    const QVector<SceneConfig> &scenes() const;
 
     void addScene(const SceneConfig &scene);
     void removeScene(int index);

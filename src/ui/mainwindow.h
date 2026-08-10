@@ -7,9 +7,10 @@
 #include <QTextEdit>
 #include <QPushButton>
 #include <QLabel>
+#include <QCheckBox>
 #include "../core/configmanager.h"
 #include "../core/simtcpserver.h"
-
+#include "ZDDSProtolcol.h"
 class MainWindow : public QMainWindow
 {
     Q_OBJECT
@@ -24,9 +25,11 @@ private slots:
     void onCopyProtocol();
     void onSceneSelectionChanged();
     void onStartService();
+    void onStartService(int index);
     void onStopService();
     void onLog(const QString &msg);
     void onProtocolDoubleClicked(int row, int col);
+    void onTestBtnClicked();
 
 private:
     void setupUi();
@@ -35,6 +38,7 @@ private:
     void updateServiceStatus();
     void autoSave();
     void autoLoad();
+    void controlSceneStatus(QString sceneName, bool openScene);
 
     ConfigManager m_config;
     SimTcpServer *m_server;
@@ -46,6 +50,9 @@ private:
     QTextEdit *m_logEdit;
     QPushButton *m_btnStart;
     QPushButton *m_btnStop;
+    QLineEdit   *m_testEdit;
+    QCheckBox   *m_testBox;
+    QPushButton *m_btnTest;
     QPushButton *m_btnSceneMgmt;
     QPushButton *m_btnAddProto;
     QPushButton *m_btnEditProto;

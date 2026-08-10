@@ -41,7 +41,6 @@ void SimTcpServer::stop()
     m_server->close();
     delete m_server;
     m_server = nullptr;
-    emit logMessage("[服务] TCP服务已停止");
 }
 
 bool SimTcpServer::isRunning() const
