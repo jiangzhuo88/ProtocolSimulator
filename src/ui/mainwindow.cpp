@@ -101,6 +101,7 @@ void MainWindow::setupUi()
     auto protoGroup = new QGroupBox("协议列表 (双击编辑)");
     auto protoLayout = new QVBoxLayout(protoGroup);
     m_protocolTable = new QTableWidget(0, 6);
+    m_protocolTable->setAlternatingRowColors(true);
     m_protocolTable->setHorizontalHeaderLabels({"协议名称", "类型", "状态", "匹配字段", "回复模式", "描述"});
     m_protocolTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
     m_protocolTable->setSelectionBehavior(QAbstractItemView::SelectRows);

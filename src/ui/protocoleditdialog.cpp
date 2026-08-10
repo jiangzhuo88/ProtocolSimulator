@@ -430,6 +430,9 @@ ProtocolEditDialog::ProtocolEditDialog(ProtocolConfig &proto, QVector<ProtocolCo
 {
     setupUi();
     loadProtocol();
+    // 启用所有表格的交替行色(QSS已设alternate-background-color, 需此开关才生效)
+    for (auto *t : findChildren<QTableWidget*>())
+        t->setAlternatingRowColors(true);
     updatePreview();
 }
 
@@ -818,10 +821,12 @@ void ProtocolEditDialog::setupUi()
     connect(btnOk, &QPushButton::clicked, [this]() { saveProtocol(); accept(); });
     connect(btnCancel, &QPushButton::clicked, this, &QDialog::reject);
 
-    // 定时刷新预览
-    auto *timer = new QTimer(this);
-    timer->start(500);
-    connect(timer, &QTimer::timeout, this, &ProtocolEditDialog::onPreviewTimer);
+    // 防抖定时器: 编辑后延迟刷新预览, 避免每次按键都全量重建(saveProtocol+buildFrame+HTML)
+    m_previewTimer = new QTimer(this);
+    m_previewTimer->setSingleShot(true);
+    m_previewTimer->setInterval(350);
+    m_previewDirty = false;
+    connect(m_previewTimer, &QTimer::timeout, this, &ProtocolEditDialog::onPreviewTimer);
 
     installEventFilter(this);
 }
@@ -1781,6 +1786,22 @@ bool ProtocolEditDialog::eventFilter(QObject *obj, QEvent *event)
 void ProtocolEditDialog::onParamChanged()
 {
     if (m_loading) return;
+    // 防抖: 不立即全量刷新(否则每次按键都遍历4张表+buildFrame+渲染HTML, 参数多时极卡)
+    // 仅标记脏并重启定时器, 停止编辑350ms后统一刷新一次
+    markPreviewDirty();
+}
+
+void ProtocolEditDialog::markPreviewDirty()
+{
+    m_previewDirty = true;
+    m_previewTimer->start(); // 重启防抖计时(单次触发)
+}
+
+void ProtocolEditDialog::onPreviewTimer()
+{
+    // 防抖定时器触发: 若有未刷新的编辑, 统一刷新匹配高亮+预览
+    if (!m_previewDirty) return;
+    m_previewDirty = false;
     updateMatchHighlight(m_headerTable);
     updateMatchHighlight(m_dataTable);
     updatePreview();
@@ -2084,11 +2105,26 @@ void ProtocolEditDialog::updateMatchHighlight(QTableWidget *table)
 
 void ProtocolEditDialog::updatePreview()
 {
+    // 取消pending防抖: 本函数已直接刷新, 避免定时器再触发一次重复刷新
+    m_previewDirty = false;
+    m_previewTimer->stop();
     saveProtocol();
+
+    // 截断超长hex显示: StructArray/大数组单字段可达数千字节, 全量渲染HTML会卡顿
+    // 超过maxBytes字节的hex只显示前部分并标注总字节数
+    auto truncHex = [](const QByteArray &data, int maxBytes = 64) -> QString {
+        QString hex = QString::fromLatin1(data.toHex(' '));
+        if (data.size() <= maxBytes) return hex;
+        // 按字节截断(maxBytes字节 → maxBytes*3字符含空格)
+        QStringList head;
+        for (int i = 0; i < maxBytes; ++i)
+            head << QString("%1").arg((quint8)data[i], 2, 16, QChar('0')).toUpper();
+        return head.join(' ') + QString(" ... (共%1字节, 已省略)").arg(data.size());
+    };
 
     // 构建接收帧预览 (HTML格式)
     QByteArray frame = m_proto.buildFrame(0);
-    QString hex = QString::fromLatin1(frame.toHex(' '));
+    QString hex = truncHex(frame);
 
     QString detail = "<pre style='font-family: monospace; font-size: 13px; margin: 0;'>";
     int offset = 0;
@@ -2096,7 +2132,7 @@ void ProtocolEditDialog::updatePreview()
     for (const auto &p : m_proto.headerParams) {
         int sz = p.byteSize();
         QByteArray fieldData = frame.mid(offset, sz);
-        QString fieldHex = QString::fromLatin1(fieldData.toHex(' '));
+        QString fieldHex = truncHex(fieldData);
 
         QString arrayInfo;
         if (p.arrayCount > 1)
@@ -2131,7 +2167,7 @@ void ProtocolEditDialog::updatePreview()
     for (const auto &p : m_proto.dataParams) {
         int sz = p.byteSize();
         QByteArray fieldData = frame.mid(offset, sz);
-        QString fieldHex = QString::fromLatin1(fieldData.toHex(' '));
+        QString fieldHex = truncHex(fieldData);
 
         QString arrayInfo;
         if (p.arrayCount > 1)
@@ -2172,7 +2208,7 @@ void ProtocolEditDialog::updatePreview()
     QString replyDetail = "<pre style='font-family: monospace; font-size: 13px; margin: 0;'>";
 
     // 生成单个帧的字段明细HTML
-    auto buildFrameDetail = [](const QByteArray &frame, const QVector<ProtocolParam> &hdrParams,
+    auto buildFrameDetail = [truncHex](const QByteArray &frame, const QVector<ProtocolParam> &hdrParams,
                                const QVector<ProtocolParam> &dataParams) -> QString {
         QString s;
         int roffset = 0;
@@ -2201,7 +2237,7 @@ void ProtocolEditDialog::updatePreview()
 
             s += QString("<span%1>  偏移:%2  %3  值:%4%5%6%7</span><br>")
                  .arg(bgStyle).arg(roffset).arg(p.name)
-                 .arg(QString::fromLatin1(fieldData.toHex(' '))).arg(arrayInfo).arg(randInfo)
+                 .arg(truncHex(fieldData)).arg(arrayInfo).arg(randInfo)
                  .arg(ProtocolEditDialog::zeroFillWarnHtml(p, sz));
             roffset += sz;
         }
@@ -2230,12 +2266,12 @@ void ProtocolEditDialog::updatePreview()
 
             s += QString("<span%1>  偏移:%2  %3  值:%4%5%6%7</span><br>")
                  .arg(bgStyle).arg(roffset).arg(p.name)
-                 .arg(QString::fromLatin1(fieldData.toHex(' '))).arg(arrayInfo).arg(randInfo)
+                 .arg(truncHex(fieldData)).arg(arrayInfo).arg(randInfo)
                  .arg(ProtocolEditDialog::zeroFillWarnHtml(p, sz));
             roffset += sz;
         }
         s += QString("<b>完整帧 (%1字节):</b> %2").arg(frame.size())
-             .arg(QString::fromLatin1(frame.toHex(' ')));
+             .arg(truncHex(frame));
         return s;
     };
 

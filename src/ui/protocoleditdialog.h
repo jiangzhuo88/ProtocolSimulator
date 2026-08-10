@@ -67,6 +67,8 @@ private:
     void saveProtocol();
     void updatePreview();
     void updateMatchHighlight(QTableWidget *table);
+    // 标记预览脏, 由防抖定时器延迟刷新(避免每次单元格编辑都全量重建)
+    void markPreviewDirty();
 
     // 参数表操作: isReplyTable=true表示回复表(无匹配列, 有随机列)
     void populateParamRow(QTableWidget *table, int row, const ProtocolParam &param, bool isReplyTable);
@@ -132,6 +134,8 @@ private:
     // 预览
     QLabel *m_previewLabel;
     QLabel *m_replyPreviewLabel;
+    QTimer *m_previewTimer;   // 防抖定时器: 编辑后延迟刷新预览
+    bool m_previewDirty;      // 预览脏标志: true表示待刷新
 
     bool m_loading; // 加载中标志, 防止onParamChanged覆盖数据
     WheelEventFilter *wheelFilter;
