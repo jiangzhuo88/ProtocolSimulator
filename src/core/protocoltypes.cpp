@@ -38,6 +38,7 @@ int ProtocolParam::byteSize() const
         singleSize = s.size() / 2;
         break;
     }
+    case ParamType::StructArray: break; // 已在函数开头提前return, 不会到达
     }
     // 数组: 单元素大小 × 元素个数
     return singleSize * (arrayCount > 0 ? arrayCount : 1);
@@ -293,6 +294,7 @@ QByteArray ProtocolParam::singleElementToBytes(const QString &val) const
         if (userLength > 0) singleData.resize(userLength);
         break;
     }
+    case ParamType::StructArray: break; // 结构体数组走toBytes/toRandomBytes, 不走单元素转换
     }
     return singleData;
 }
@@ -424,6 +426,7 @@ QString ProtocolParam::fromBytes(const QByteArray &data, ParamType type, ByteOrd
     case ParamType::StringUtf8: return QString::fromUtf8(data);
     case ParamType::Bytes:
     case ParamType::Hex: return QString::fromLatin1(data.toHex(' '));
+    case ParamType::StructArray: return QString::fromLatin1(data.toHex(' ')); // 结构体数组不参与单值解码, 返回hex
     }
     return QString();
 }
@@ -527,6 +530,7 @@ QByteArray ProtocolParam::matchValueToBytes(const QString &value) const
             s.remove(0, 2);
         return QByteArray::fromHex(s.toLatin1());
     }
+    case ParamType::StructArray: return QByteArray(); // 结构体数组不参与匹配值转换
     }
     return QByteArray();
 }
