@@ -25,7 +25,8 @@ enum class ParamType {
     String,      // ASCII字符串
     StringUtf8,  // UTF-8字符串
     Bytes,       // 固定字节
-    Hex          // 十六进制字节序列
+    Hex,         // 十六进制字节序列
+    StructArray  // 结构体数组: 每元素由subFields定义的多个字段组成, 内存交错布局(a0 b0 a1 b1...)
 };
 
 // 字节序
@@ -86,6 +87,12 @@ struct ProtocolParam {
     QString randomMin;         // 随机最小值
     QString randomMax;         // 随机最大值
     int randomLength;          // 随机字节长度(Bytes/Hex类型用)
+
+    // 结构体数组的子字段定义(仅type==StructArray时用)
+    // 每个子字段是完整的ProtocolParam(有独立type/byteOrder/isRandom/randomMin/randomMax等)
+    // arrayCount表示结构体个数, 内存布局: field0[0] field1[0] field0[1] field1[1] ... (交错)
+    // 子字段的arrayCount固定为1(不支持嵌套结构体数组)
+    QVector<ProtocolParam> subFields;
 
     ProtocolParam()
         : type(ParamType::UInt16)

@@ -299,6 +299,132 @@ private:
     }
 };
 
+// ================== 结构体子字段编辑对话框(内部类, 无需Q_OBJECT) ==================
+// 用于StructArray类型参数: 编辑结构体的成员字段定义
+// 每行一个子字段: 名称/类型/字节序/是否随机/随机最小/随机最大
+// 子字段的arrayCount固定为1(不支持嵌套结构体数组), defaultValue作为非随机时的固定值
+class StructFieldEditDialog : public QDialog
+{
+public:
+    StructFieldEditDialog(const QVector<ProtocolParam> &fields, QWidget *parent = nullptr)
+        : QDialog(parent)
+    {
+        setWindowTitle("编辑结构体子字段 (每字段可独立设随机范围)");
+        resize(780, 480);
+        auto lay = new QVBoxLayout(this);
+
+        lay->addWidget(new QLabel("结构体成员定义 (每行一个字段, 内存按此顺序交错排列):\n"
+                                  "示例: 字段a=Int16 随机[-2000,-1500], 字段b=Int16 随机[1,100], arrayCount=800 → a0 b0 a1 b1 ..."));
+
+        m_table = new QTableWidget(0, 6);
+        m_table->setHorizontalHeaderLabels({"名称", "类型", "字节序", "随机", "随机最小", "随机最大"});
+        m_table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::Stretch);
+        m_table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+        m_table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+        m_table->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
+        m_table->horizontalHeader()->setSectionResizeMode(4, QHeaderView::Stretch);
+        m_table->horizontalHeader()->setSectionResizeMode(5, QHeaderView::Stretch);
+        lay->addWidget(m_table);
+
+        // 填充已有字段
+        for (const auto &f : fields) addRow(f);
+
+        auto btnLay = new QHBoxLayout;
+        auto btnAdd = new QPushButton("添加字段");
+        auto btnDel = new QPushButton("删除选中");
+        auto btnUp = new QPushButton("上移");
+        auto btnDown = new QPushButton("下移");
+        btnLay->addWidget(btnAdd);
+        btnLay->addWidget(btnDel);
+        btnLay->addWidget(btnUp);
+        btnLay->addWidget(btnDown);
+        btnLay->addStretch();
+        auto ok = new QPushButton("确定");
+        auto cancel = new QPushButton("取消");
+        btnLay->addWidget(ok);
+        btnLay->addWidget(cancel);
+        lay->addLayout(btnLay);
+
+        connect(btnAdd, &QPushButton::clicked, [this]() { addRow(ProtocolParam()); });
+        connect(btnDel, &QPushButton::clicked, [this]() {
+            int r = m_table->currentRow();
+            if (r >= 0) m_table->removeRow(r);
+        });
+        connect(btnUp, &QPushButton::clicked, [this]() {
+            int r = m_table->currentRow();
+            if (r > 0) {
+                auto f = readRow(r);
+                m_table->removeRow(r);
+                insertRowAt(r - 1, f);
+                m_table->setCurrentCell(r - 1, 0);
+            }
+        });
+        connect(btnDown, &QPushButton::clicked, [this]() {
+            int r = m_table->currentRow();
+            if (r >= 0 && r < m_table->rowCount() - 1) {
+                auto f = readRow(r);
+                m_table->removeRow(r);
+                insertRowAt(r + 1, f);
+                m_table->setCurrentCell(r + 1, 0);
+            }
+        });
+        connect(ok, &QPushButton::clicked, this, &QDialog::accept);
+        connect(cancel, &QPushButton::clicked, this, &QDialog::reject);
+    }
+
+    // 返回编辑后的子字段列表
+    QVector<ProtocolParam> fields() const {
+        QVector<ProtocolParam> result;
+        for (int i = 0; i < m_table->rowCount(); ++i)
+            result.append(readRow(i));
+        return result;
+    }
+
+private:
+    QTableWidget *m_table;
+
+    void addRow(const ProtocolParam &f) { insertRowAt(m_table->rowCount(), f); }
+
+    void insertRowAt(int row, const ProtocolParam &f) {
+        m_table->insertRow(row);
+        m_table->setItem(row, 0, new QTableWidgetItem(f.name));
+
+        auto typeCombo = new QComboBox;
+        typeCombo->setFocusPolicy(Qt::StrongFocus);
+        // 不含StructArray本身(不支持嵌套)
+        for (int i = 0; i <= (int)ParamType::Hex; ++i)
+            typeCombo->addItem(ProtocolParam::typeToString((ParamType)i));
+        typeCombo->setCurrentIndex((int)f.type);
+        m_table->setCellWidget(row, 1, typeCombo);
+
+        auto orderCombo = new QComboBox;
+        orderCombo->setFocusPolicy(Qt::StrongFocus);
+        orderCombo->addItem("BigEndian");
+        orderCombo->addItem("LittleEndian");
+        orderCombo->setCurrentIndex((int)f.byteOrder);
+        m_table->setCellWidget(row, 2, orderCombo);
+
+        auto randCheck = new QCheckBox;
+        randCheck->setChecked(f.isRandom);
+        m_table->setCellWidget(row, 3, randCheck);
+
+        m_table->setItem(row, 4, new QTableWidgetItem(f.randomMin));
+        m_table->setItem(row, 5, new QTableWidgetItem(f.randomMax));
+    }
+
+    ProtocolParam readRow(int row) const {
+        ProtocolParam f;
+        f.name = m_table->item(row, 0) ? m_table->item(row, 0)->text() : "";
+        if (auto c = qobject_cast<QComboBox*>(m_table->cellWidget(row, 1))) f.type = (ParamType)c->currentIndex();
+        if (auto c = qobject_cast<QComboBox*>(m_table->cellWidget(row, 2))) f.byteOrder = (ByteOrder)c->currentIndex();
+        if (auto c = qobject_cast<QCheckBox*>(m_table->cellWidget(row, 3))) f.isRandom = c->isChecked();
+        f.randomMin = m_table->item(row, 4) ? m_table->item(row, 4)->text() : "";
+        f.randomMax = m_table->item(row, 5) ? m_table->item(row, 5)->text() : "";
+        f.arrayCount = 1;  // 子字段固定单值
+        return f;
+    }
+};
+
 ProtocolEditDialog::ProtocolEditDialog(ProtocolConfig &proto, QVector<ProtocolConfig> *allProtocols, QWidget *parent)
     : QDialog(parent), m_proto(proto), m_allProtocols(allProtocols), m_loading(false), wheelFilter(new WheelEventFilter(this))
 {
@@ -782,15 +908,29 @@ static bool isRawByteType(ParamType type)
            type == ParamType::String || type == ParamType::StringUtf8;
 }
 
+// StructArray类型: 用按钮编辑子字段, 默认值/字节序列化由子字段决定
+static bool isStructArrayType(ParamType type)
+{
+    return type == ParamType::StructArray;
+}
+
 void ProtocolEditDialog::populateParamRow(QTableWidget *table, int row, const ProtocolParam &param, bool isReplyTable)
 {
     // 名称 (0)
     auto *itemName = new QTableWidgetItem(param.name);
     table->setItem(row, 0, itemName);
 
-    // 字节序/长度 (2) -- 数值类型显示字节序, Hex/Bytes/String显示长度
+    // 字节序/长度 (2) -- 数值类型显示字节序, Hex/Bytes/String显示长度, StructArray显示子字段总大小(只读)
     auto setupOrderOrLength = [this, table, row](ParamType t, ByteOrder order, int len) {
-        if (isRawByteType(t)) {
+        if (isStructArrayType(t)) {
+            // StructArray: 第2列显示单结构体字节数(只读), 子字段各有自己的字节序
+            auto lenSpin = new QSpinBox;
+            lenSpin->setRange(0, 999999);
+            lenSpin->setValue(len);
+            lenSpin->setEnabled(false);
+            lenSpin->setToolTip("单结构体字节数(子字段大小之和, 只读)");
+            table->setCellWidget(row, 2, lenSpin);
+        } else if (isRawByteType(t)) {
             auto lenSpin = new QSpinBox;
             lenSpin->setRange(0, 9999);
             lenSpin->setValue(len);
@@ -808,13 +948,20 @@ void ProtocolEditDialog::populateParamRow(QTableWidget *table, int row, const Pr
             connect(orderCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &ProtocolEditDialog::onParamChanged);
         }
     };
-    setupOrderOrLength(param.type, param.byteOrder, param.userLength);
+    // StructArray初始len: 算子字段总大小
+    int initLen = param.userLength;
+    if (isStructArrayType(param.type)) {
+        int sfSum = 0;
+        for (const auto &sf : param.subFields) sfSum += sf.byteSize();
+        initLen = sfSum;
+    }
+    setupOrderOrLength(param.type, param.byteOrder, initLen);
 
-    // 类型 (1)
+    // 类型 (1) -- 包含StructArray
     auto typeCombo = new QComboBox;
     typeCombo->setFocusPolicy(Qt::StrongFocus);
     typeCombo->installEventFilter(wheelFilter);
-    for (int i = 0; i <= (int)ParamType::Hex; ++i)
+    for (int i = 0; i <= (int)ParamType::StructArray; ++i)
         typeCombo->addItem(ProtocolParam::typeToString((ParamType)i));
     typeCombo->setCurrentIndex((int)param.type);
     table->setCellWidget(row, 1, typeCombo);
@@ -829,6 +976,25 @@ void ProtocolEditDialog::populateParamRow(QTableWidget *table, int row, const Pr
         if (auto oldSpin = qobject_cast<QSpinBox*>(table->cellWidget(row, 2)))
             currLen = oldSpin->value();
         setupOrderOrLength(t, currOrder, currLen);
+
+        // 类型变化后重建第4列默认值控件:
+        // - 切换到StructArray: 用当前subFieldsData(若空则空数组), 保留arrayCount作为结构体个数
+        // - 从StructArray切到其他: subFieldsData不可复用, 用空单值或空数组
+        int curCount = 1;
+        if (auto as = qobject_cast<QSpinBox*>(table->cellWidget(row, 3))) curCount = as->value();
+        if (isStructArrayType(t)) {
+            QString sfData;
+            if (auto btn = qobject_cast<QPushButton*>(table->cellWidget(row, 4)))
+                sfData = btn->property("subFieldsData").toString();
+            if (sfData.isEmpty()) sfData = "[]";
+            setupDefaultValueCell(table, row, curCount, sfData);
+        } else {
+            // 从StructArray切出: 用空值重建(数组>1则空数组, 单值则空串)
+            if (curCount > 1)
+                setupDefaultValueCell(table, row, curCount, "[]");
+            else
+                setupDefaultValueCell(table, row, 1, "");
+        }
         onParamChanged();
     });
 
@@ -840,6 +1006,20 @@ void ProtocolEditDialog::populateParamRow(QTableWidget *table, int row, const Pr
     table->setCellWidget(row, 3, arraySpin);
     // 数组个数变化时, 切换默认值列控件(单值文本<->数组按钮)
     connect(arraySpin, QOverload<int>::of(&QSpinBox::valueChanged), [this, table, row](int newCount) {
+        // StructArray类型: arrayCount是结构体个数, 子字段定义不变, 只需用当前subFieldsData重建按钮
+        ParamType curType = ParamType::UInt16;
+        if (auto tc = qobject_cast<QComboBox*>(table->cellWidget(row, 1)))
+            curType = (ParamType)tc->currentIndex();
+        if (isStructArrayType(curType)) {
+            QString sfData;
+            if (auto btn = qobject_cast<QPushButton*>(table->cellWidget(row, 4)))
+                sfData = btn->property("subFieldsData").toString();
+            if (sfData.isEmpty()) sfData = "[]";
+            setupDefaultValueCell(table, row, newCount, sfData);
+            onParamChanged();
+            return;
+        }
+
         // 读取当前默认值
         QString curVal;
         auto btn = qobject_cast<QPushButton*>(table->cellWidget(row, 4));
@@ -871,7 +1051,14 @@ void ProtocolEditDialog::populateParamRow(QTableWidget *table, int row, const Pr
     connect(arraySpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &ProtocolEditDialog::onParamChanged);
 
     // 默认值 (4): 根据数组个数选择控件
-    setupDefaultValueCell(table, row, param.arrayCount, param.defaultValue);
+    // StructArray的子字段存在param.subFields, 需序列化为JSON传给setupDefaultValueCell
+    QString defValForCell = param.defaultValue;
+    if (isStructArrayType(param.type) && !param.subFields.isEmpty()) {
+        QJsonArray sfArr;
+        for (const auto &sf : param.subFields) sfArr.append(sf.toJson());
+        defValForCell = QString::fromUtf8(QJsonDocument(sfArr).toJson(QJsonDocument::Compact));
+    }
+    setupDefaultValueCell(table, row, param.arrayCount, defValForCell);
 
     // 动态类型 (5)
     auto dynCombo = new QComboBox;
@@ -981,9 +1168,26 @@ ProtocolParam ProtocolEditDialog::readParamRow(QTableWidget *table, int row, boo
     if (arraySpin) param.arrayCount = arraySpin->value();
 
     // 默认值列: 数组时是按钮(存arrayData), 单值时是容器(QLineEdit+文件按钮)
+    // StructArray时按钮存subFieldsData(子字段JSON), 需解析回subFields并清空defaultValue
     auto defBtn = qobject_cast<QPushButton*>(table->cellWidget(row, 4));
     if (defBtn) {
-        param.defaultValue = defBtn->property("arrayData").toString();
+        if (isStructArrayType(param.type)) {
+            // StructArray: 从subFieldsData解析子字段, defaultValue留空
+            param.defaultValue.clear();
+            param.subFields.clear();
+            QString sfData = defBtn->property("subFieldsData").toString();
+            if (sfData.trimmed().startsWith('[')) {
+                QJsonDocument doc = QJsonDocument::fromJson(sfData.toUtf8());
+                if (doc.isArray()) {
+                    for (const auto &v : doc.array()) {
+                        ProtocolParam sf; sf.fromJson(v.toObject());
+                        param.subFields.append(sf);
+                    }
+                }
+            }
+        } else {
+            param.defaultValue = defBtn->property("arrayData").toString();
+        }
     } else {
         // 单值容器: 找里面的QLineEdit
         auto container = qobject_cast<QWidget*>(table->cellWidget(row, 4));
@@ -1040,6 +1244,72 @@ void ProtocolEditDialog::setupDefaultValueCell(QTableWidget *table, int row, int
     if (old) {
         table->removeCellWidget(row, 4);
         delete old;
+    }
+
+    // 检测当前类型是否为StructArray(通过typeCombo)
+    ParamType curType = ParamType::UInt16;
+    if (auto tc = qobject_cast<QComboBox*>(table->cellWidget(row, 1)))
+        curType = (ParamType)tc->currentIndex();
+
+    if (isStructArrayType(curType)) {
+        // StructArray: 用按钮编辑子字段, property存subFields的JSON
+        // 从当前param读取已有subFields(若defaultValue是subFields的JSON则解析, 否则空)
+        QVector<ProtocolParam> subFields;
+        if (defaultValue.trimmed().startsWith('[')) {
+            QJsonDocument doc = QJsonDocument::fromJson(defaultValue.toUtf8());
+            if (doc.isArray()) {
+                for (const auto &v : doc.array()) {
+                    ProtocolParam sf;
+                    sf.fromJson(v.toObject());
+                    subFields.append(sf);
+                }
+            }
+        }
+        auto btn = new QPushButton;
+        btn->setFocusPolicy(Qt::StrongFocus);
+        int sfSum = 0;
+        for (const auto &sf : subFields) sfSum += sf.byteSize();
+        btn->setText(QString("编辑结构体(%1字段,%2B/个)").arg(subFields.size()).arg(sfSum));
+        btn->setToolTip("点击编辑结构体成员字段定义\n每字段可独立设类型/字节序/随机范围\n内存布局: field0[0] field1[0] field0[1] field1[1] ... (交错)");
+        // 存subFields的JSON到property
+        QJsonArray sfArr;
+        for (const auto &sf : subFields) sfArr.append(sf.toJson());
+        btn->setProperty("subFieldsData", QString::fromUtf8(
+            QJsonDocument(sfArr).toJson(QJsonDocument::Compact)));
+        table->setCellWidget(row, 4, btn);
+        if (!table->item(row, 4)) table->setItem(row, 4, new QTableWidgetItem(""));
+        table->item(row, 4)->setFlags(Qt::NoItemFlags);
+
+        connect(btn, &QPushButton::clicked, this, [this, table, row, btn]() {
+            // 读取当前subFields
+            QVector<ProtocolParam> sfs;
+            QString data = btn->property("subFieldsData").toString();
+            if (data.trimmed().startsWith('[')) {
+                QJsonDocument doc = QJsonDocument::fromJson(data.toUtf8());
+                if (doc.isArray()) {
+                    for (const auto &v : doc.array()) {
+                        ProtocolParam sf; sf.fromJson(v.toObject());
+                        sfs.append(sf);
+                    }
+                }
+            }
+            StructFieldEditDialog dlg(sfs, this);
+            if (dlg.exec() == QDialog::Accepted) {
+                QVector<ProtocolParam> newSfs = dlg.fields();
+                QJsonArray arr;
+                for (const auto &sf : newSfs) arr.append(sf.toJson());
+                QString jsonData = QString::fromUtf8(QJsonDocument(arr).toJson(QJsonDocument::Compact));
+                btn->setProperty("subFieldsData", jsonData);
+                int sfSum = 0;
+                for (const auto &sf : newSfs) sfSum += sf.byteSize();
+                btn->setText(QString("编辑结构体(%1字段,%2B/个)").arg(newSfs.size()).arg(sfSum));
+                // 同步第2列的只读字节数显示
+                if (auto lenSpin = qobject_cast<QSpinBox*>(table->cellWidget(row, 2)))
+                    lenSpin->setValue(sfSum);
+                onParamChanged();
+            }
+        });
+        return;
     }
 
     if (arrayCount > 1) {

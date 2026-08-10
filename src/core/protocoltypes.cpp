@@ -8,6 +8,14 @@
 
 int ProtocolParam::byteSize() const
 {
+    // 结构体数组: 单结构体大小(subFields总和) × 结构体个数(arrayCount)
+    if (type == ParamType::StructArray) {
+        int singleSize = 0;
+        for (const auto &sf : subFields)
+            singleSize += sf.byteSize();
+        return singleSize * (arrayCount > 0 ? arrayCount : 1);
+    }
+
     int singleSize = 0;
     // 数组且defaultValue为JSON数组时, 取第一个元素计算单元素大小
     QString val = defaultValue;
@@ -38,6 +46,22 @@ int ProtocolParam::byteSize() const
 QByteArray ProtocolParam::toBytes(quint64 seq, int dataAreaLen, const QByteArray &fullFrame,
                                   int packetIndex, int packetSize, int totalPackets) const
 {
+    // 结构体数组: 交错布局 a0 b0 a1 b1 ...
+    // 每个结构体实例遍历subFields, isRandom的用toRandomBytes, 否则用toBytes(各自defaultValue)
+    if (type == ParamType::StructArray) {
+        int count = arrayCount > 0 ? arrayCount : 1;
+        QByteArray result;
+        for (int i = 0; i < count; ++i) {
+            for (const auto &sf : subFields) {
+                if (sf.isRandom)
+                    result += sf.toRandomBytes();
+                else
+                    result += sf.toBytes(seq, 0, QByteArray(), packetIndex, packetSize, totalPackets);
+            }
+        }
+        return result;
+    }
+
     // 处理动态类型
     if (dynamicType == DynamicType::Timestamp) {
         quint64 ts;
@@ -296,6 +320,22 @@ QStringList ProtocolParam::parseDefaultValues() const
 
 QByteArray ProtocolParam::toRandomBytes() const
 {
+    // 结构体数组: 随机性由各子字段独立决定(子字段isRandom控制), 外层isRandom无意义
+    // 交错布局: field0[0] field1[0] field0[1] field1[1] ...
+    if (type == ParamType::StructArray) {
+        int count = arrayCount > 0 ? arrayCount : 1;
+        QByteArray result;
+        for (int i = 0; i < count; ++i) {
+            for (const auto &sf : subFields) {
+                if (sf.isRandom)
+                    result += sf.toRandomBytes();
+                else
+                    result += sf.toBytes();
+            }
+        }
+        return result;
+    }
+
     if (!isRandom) return toBytes();
 
     int count = arrayCount > 0 ? arrayCount : 1;
@@ -552,6 +592,12 @@ QJsonObject ProtocolParam::toJson() const
     o["randomMin"] = randomMin;
     o["randomMax"] = randomMax;
     o["randomLength"] = randomLength;
+    // 结构体数组子字段(仅StructArray类型有内容)
+    if (type == ParamType::StructArray && !subFields.isEmpty()) {
+        QJsonArray sfArr;
+        for (const auto &sf : subFields) sfArr.append(sf.toJson());
+        o["subFields"] = sfArr;
+    }
     return o;
 }
 
@@ -573,6 +619,10 @@ void ProtocolParam::fromJson(const QJsonObject &o)
     randomMin = o["randomMin"].toString();
     randomMax = o["randomMax"].toString();
     randomLength = o["randomLength"].toInt(8);
+    // 结构体数组子字段
+    subFields.clear();
+    QJsonArray sfArr = o["subFields"].toArray();
+    for (const auto &v : sfArr) { ProtocolParam sf; sf.fromJson(v.toObject()); subFields.append(sf); }
 }
 
 QString ProtocolParam::typeToString(ParamType t)
@@ -592,6 +642,7 @@ QString ProtocolParam::typeToString(ParamType t)
     case ParamType::StringUtf8: return "StringUtf8";
     case ParamType::Bytes: return "Bytes";
     case ParamType::Hex: return "Hex";
+    case ParamType::StructArray: return "StructArray";
     }
     return "UInt16";
 }
@@ -612,6 +663,7 @@ ParamType ProtocolParam::stringToType(const QString &s)
     if (s == "StringUtf8") return ParamType::StringUtf8;
     if (s == "Bytes") return ParamType::Bytes;
     if (s == "Hex") return ParamType::Hex;
+    if (s == "StructArray") return ParamType::StructArray;
     return ParamType::UInt16;
 }
 
