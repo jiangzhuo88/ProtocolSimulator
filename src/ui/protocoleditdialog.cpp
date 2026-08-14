@@ -1743,10 +1743,10 @@ void ProtocolEditDialog::onMpDataTableContextMenu(const QPoint &pos)
     else if (selected == actDel) onRemoveMpData();
 }
 
-void ProtocolEditDialog::onPreviewTimer()
-{
-    updatePreview();
-}
+//void ProtocolEditDialog::onPreviewTimer()
+//{
+//    updatePreview();
+//}
 
 // 检测Hex/Bytes类型参数: defaultValue为空但占用字节>0时, 会被memset(0)填充发出
 // 这种"无内容却发了0字节"在分包负载场景下是异常, 应提示用户从文件加载真实数据

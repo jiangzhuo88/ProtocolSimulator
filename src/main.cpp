@@ -3,8 +3,6 @@
 #include <QStyleFactory>
 #include "ui/mainwindow.h"
 
-// 现代扁平化主题: 浅色背景/圆角/柔和蓝灰主色/hover反馈
-// 替代原Windows经典风格, 提升整体观感
 static const char *kAppStyle = R"(
 * { font-family: "Microsoft YaHei", "Segoe UI", "PingFang SC", sans-serif; font-size: 9pt; }
 
