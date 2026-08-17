@@ -133,6 +133,9 @@ struct ProtocolParam {
     static QString fromBytes(const QByteArray &data, ParamType type, ByteOrder order);
     // 匹配检查: received为收到的该字段字节
     bool match(const QByteArray &received) const;
+    // 零拷贝匹配重载: data是rx buffer的原始指针, off是字段偏移, size是字段本字节长度(byteSize())
+    // — tryMatch热点路径用, 避免每次都构造QByteArray mid拷贝
+    bool match(const uchar *data, int off, int size) const;
     // 将匹配值字符串转为字节序列(考虑字段类型和字节序)
     QByteArray matchValueToBytes(const QString &value) const;
 
@@ -213,7 +216,21 @@ struct ProtocolConfig {
     bool stopAllPeriodicOnMatch;            // 匹配成功时停止所有正在运行的周期回复
     QStringList stopPeriodicProtocolNames;  // 匹配成功时要停止的周期回复协议名称列表
 
-    ProtocolConfig() : isActivePush(false), pushIntervalMs(1000), fixedFrameLength(0), stopAllPeriodicOnMatch(false) {}
+    // === 匹配/构帧热点缓存(减少tryMatch/doReply里每次O(N)累加byteSize) ===
+    // recalcCachedSizes() 每次修改headerParams/dataParams/replyConfig/fixedFrameLength后都要调一下
+    int cachedHeaderSize = 0;   // headerParams总byteSize之和
+    int cachedDataSize   = 0;   // dataParams总byteSize之和
+    int cachedReplyHeaderSize = 0; // replyConfig.headerParams总byteSize之和(用于buildReplyFrame预分配)
+    int cachedReplyDataSize   = 0; // replyConfig.dataParams总byteSize之和(用于buildReplyFrame预分配)
+    int cachedMinFrameSize  = 0;   // min(fixedFrameLength > 0 ? fixedFrameLength : (headerSize+dataSize))
+    int cachedTotalFrameSize = 0;  // total帧长(同上)
+
+    ProtocolConfig() : isActivePush(false), pushIntervalMs(1000), fixedFrameLength(0), stopAllPeriodicOnMatch(false) {
+        recalcCachedSizes();
+    }
+
+    // 所有字段修改后调用: 重新计算cached*Size, 避免tryMatch/构帧里重复累加
+    void recalcCachedSizes();
 
     // 是否有效(主动上报始终有效, 或至少有一个参数启用了匹配)
     bool isValid() const;

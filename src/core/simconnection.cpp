@@ -19,6 +19,8 @@ SimConnection::~SimConnection()
 void SimConnection::setProtocols(const QVector<ProtocolConfig> &protocols)
 {
     m_protocols = protocols;
+    // 保险: 每条都重算一次cached sizes(调用方可能在QVector拷贝前没调recalcCachedSizes)
+    for (auto &p : m_protocols) p.recalcCachedSizes();
     stopAllPeriodicReplies();
 
     // 启动主动上报(心跳)定时器
@@ -46,54 +48,44 @@ void SimConnection::tryMatch()
     // 遍历所有有效协议，尝试匹配(多条协议可能同时匹配，都需回复)
     bool anyMatched = false;
     int maxMatchedSize = 0;
+    const int bufSize = m_rxBuffer.size();
+    const uchar *buf = bufSize > 0 ? (const uchar*)m_rxBuffer.constData() : nullptr;
 
     for (int i = 0; i < m_protocols.size(); ++i) {
         const ProtocolConfig &proto = m_protocols[i];
         if (proto.isActivePush) continue; // 主动上报协议不参与匹配
-        if (!proto.isValid()) continue; // 无效协议跳过
+        if (!proto.isValid()) continue;   // 无效协议跳过
 
-        // 计算帧头总长度
-        int headerSize = 0;
-        for (const auto &p : proto.headerParams)
-            headerSize += p.byteSize();
+        // 缓存size, 不再每次重算headerSize/dataSize
+        int totalSize = proto.cachedTotalFrameSize;
+        if (totalSize <= 0) continue;
+        if (bufSize < totalSize) continue;
 
-        // 计算数据区长度(固定长度)
-        int dataSize = 0;
-        for (const auto &p : proto.dataParams)
-            dataSize += p.byteSize();
-
-        int totalSize = headerSize + dataSize;
-        if (proto.fixedFrameLength > 0)
-            totalSize = proto.fixedFrameLength;
-        if (m_rxBuffer.size() < totalSize) continue;
-
-        // 提取每个字段的字节进行匹配
+        // 提取每个字段的字节进行匹配 (零拷贝: 传原始buf指针+offset+byteSize)
         bool matched = true;
         int offset = 0;
 
         // 匹配帧头参数
-        for (const auto &p : proto.headerParams) {
-            int sz = p.byteSize();
-            QByteArray fieldData = m_rxBuffer.mid(offset, sz);
-            if (p.matchEnabled && !p.match(fieldData)) {
-                matched = false;
-                break;
-            }
+        const int hs = proto.cachedHeaderSize;
+        for (int k = 0; matched && k < proto.headerParams.size(); ++k) {
+            const ProtocolParam &p = proto.headerParams[k];
+            const int sz = p.byteSize();
+            if (Q_LIKELY(!p.matchEnabled)) { offset += sz; continue; }
+            if (Q_UNLIKELY(!p.match(buf, offset, sz))) matched = false;
             offset += sz;
         }
 
         // 匹配数据区参数
         if (matched) {
-            for (const auto &p : proto.dataParams) {
-                int sz = p.byteSize();
-                QByteArray fieldData = m_rxBuffer.mid(offset, sz);
-                if (p.matchEnabled && !p.match(fieldData)) {
-                    matched = false;
-                    break;
-                }
+            for (int k = 0; matched && k < proto.dataParams.size(); ++k) {
+                const ProtocolParam &p = proto.dataParams[k];
+                const int sz = p.byteSize();
+                if (Q_LIKELY(!p.matchEnabled)) { offset += sz; continue; }
+                if (Q_UNLIKELY(!p.match(buf, offset, sz))) matched = false;
                 offset += sz;
             }
         }
+        Q_UNUSED(hs);
 
         if (matched) {
             QString addr = m_socket->peerAddress().toString() + ":" + QString::number(m_socket->peerPort());
@@ -165,16 +157,13 @@ void SimConnection::tryMatch()
         if (!m_rxBuffer.isEmpty())
             tryMatch();
     } else {
-        // 没有协议匹配: 检查buffer是否已超过所有协议的最小totalSize
-        // 如果超过,说明buffer中有残留数据顶住了后续协议,需要逐字节丢弃resync
+        // 没有协议匹配: 检查buffer是否已超过所有协议的最小cachedMinFrameSize
+        // 用proto缓存的cachedMinFrameSize, 不再每次重算所有参数的byteSize
         int minNeeded = INT_MAX;
         for (int i = 0; i < m_protocols.size(); ++i) {
             const ProtocolConfig &p = m_protocols[i];
             if (p.isActivePush || !p.isValid()) continue;
-            int sz = 0;
-            for (const auto &param : p.headerParams) sz += param.byteSize();
-            for (const auto &param : p.dataParams) sz += param.byteSize();
-            if (p.fixedFrameLength > 0) sz = p.fixedFrameLength;
+            int sz = p.cachedMinFrameSize;
             if (sz > 0 && sz < minNeeded) minNeeded = sz;
         }
         // buffer已足够大但没有协议匹配,丢弃首字节尝试resync
@@ -193,35 +182,38 @@ void SimConnection::startPeriodicReply(int protoIndex, int intervalMs,
     for (const auto &pr : m_periodicTimers) {
         if (pr.protocolIndex == protoIndex) return; // 已经在运行
     }
+    if (protoIndex < 0 || protoIndex >= m_protocols.size()) return;
 
-    auto doReply = [this, protoIndex]() {
+    // --- O(1) 访问: push_back后立刻用下标记下entryIdx, 后续doReply/取帧直接用 ---
+    const int entryIdx = m_periodicTimers.size();
+    PeriodicReply reply;
+    reply.protocolIndex = protoIndex;
+    reply.timer = nullptr;   // 先占位, 稍后timer创建后回填
+    reply.requestFrame = requestFrame;
+    reply.requestParams = requestParams;
+    m_periodicTimers.append(reply);
+
+    auto doReply = [this, protoIndex, entryIdx]() {
         if (protoIndex < 0 || protoIndex >= m_protocols.size()) return;
+        // entryIdx边界检查(异常时stopAllPeriodicReplies已清空且不再访问, 但保险起见)
+        if (entryIdx < 0 || entryIdx >= m_periodicTimers.size()) return;
+        PeriodicReply &prEntry = m_periodicTimers[entryIdx];
+        if (prEntry.protocolIndex != protoIndex) return;
+
         const ProtocolConfig &proto = m_protocols[protoIndex];
         QString addr = m_socket->peerAddress().toString() + ":" + QString::number(m_socket->peerPort());
-        // 从PeriodicReply里取出"启动时保存的请求上下文"(用于EchoRequest回显)
-        QByteArray savedReqFrame;
-        QVector<ProtocolParam> savedReqParams;
-        const QVector<ProtocolParam> *rpPtr = nullptr;
-        PeriodicReply *prEntry = nullptr;
-        for (auto &entry : m_periodicTimers)
-            if (entry.protocolIndex == protoIndex) { prEntry = &entry; break; }
-        if (prEntry) {
-            savedReqFrame = prEntry->requestFrame;
-            savedReqParams = prEntry->requestParams;
-            if (!savedReqParams.isEmpty()) rpPtr = &savedReqParams;
-        }
+        // O(1) 取请求上下文
+        const QByteArray &savedReqFrame = prEntry.requestFrame;
+        const QVector<ProtocolParam> &savedReqParams = prEntry.requestParams;
+        const QVector<ProtocolParam> *rpPtr = savedReqParams.isEmpty() ? nullptr : &savedReqParams;
+
         // 多包循环模式: 开启循环且有多包 → 每轮发N个闭环(每包=回复帧+多包帧)
         // 关键: 一轮所有包发完后再开始计时下一轮, 避免上轮未发完下轮又开始导致错包
         // 否则 → 只发发送区回复帧
         if (proto.replyConfig.multiPacketCycle && !proto.replyConfig.multiPackets.isEmpty()) {
-            // 找到本协议的PeriodicReply条目
-            PeriodicReply *pr = prEntry;
-            // 防重入: 本轮还在发(理论上不会, 因为发前已停定时器), 跳过
-            if (pr && pr->mpRoundInProgress) return;
-            if (pr) {
-                pr->mpRoundInProgress = true;
-                pr->timer->stop();   // 停掉定时器, 等本轮发完再重启计时
-            }
+            if (prEntry.mpRoundInProgress) return;
+            prEntry.mpRoundInProgress = true;
+            if (prEntry.timer) prEntry.timer->stop();   // 停掉定时器, 等本轮发完再重启计时
             auto packets = QSharedPointer<QVector<MultiPacketItem>>::create(proto.replyConfig.multiPackets);
             emit logMessage(QString("[多包循环] 协议 '%1' 周期触发, 发送 %2 个闭环包")
                             .arg(proto.name).arg(packets->size()));
@@ -233,12 +225,9 @@ void SimConnection::startPeriodicReply(int protoIndex, int intervalMs,
             bool fromPrebuilt = false;
             {
                 QMutexLocker l(&m_frameMutex);
-                for (auto &entry : m_periodicTimers) {
-                    if (entry.protocolIndex == protoIndex && !entry.readyFrames.isEmpty()) {
-                        replyData = entry.readyFrames.dequeue();
-                        fromPrebuilt = true;
-                        break;
-                    }
+                if (!prEntry.readyFrames.isEmpty()) {
+                    replyData = prEntry.readyFrames.dequeue();
+                    fromPrebuilt = true;
                 }
             }
 
@@ -276,16 +265,10 @@ void SimConnection::startPeriodicReply(int protoIndex, int intervalMs,
     timer->setTimerType(Qt::PreciseTimer);
     connect(timer, &QTimer::timeout, doReply);
     timer->start(intervalMs);
+    m_periodicTimers[entryIdx].timer = timer; // 回填timer指针
 
-    PeriodicReply reply;
-    reply.protocolIndex = protoIndex;
-    reply.timer = timer;
-    reply.requestFrame = requestFrame;
-    reply.requestParams = requestParams;
-    m_periodicTimers.append(reply);
-
-    // 启动前预构建2帧, 填充队列(异步, 不阻塞)
-    requestPrebuild(protoIndex, requestFrame, requestParams);
+    // 启动前预构建3帧, 填充队列(异步, 不阻塞) — 默认深度3, 够100ms×3发
+    requestPrebuild(protoIndex, requestFrame, requestParams, 3);
 
     // 立即发送一次
     doReply();
@@ -297,18 +280,25 @@ void SimConnection::startPeriodicReply(int protoIndex, int intervalMs,
 void SimConnection::requestPrebuild(int protoIndex, const QByteArray &reqFrame,
                                      const QVector<ProtocolParam> &reqParams, int targetDepth)
 {
-    // 在mutex内提交build任务, 保证readyFrames/buildInFlight的线程安全
-    QMutexLocker l(&m_frameMutex);
-    for (auto &entry : m_periodicTimers) {
-        if (entry.protocolIndex != protoIndex) continue;
+    // 快速查找entryIdx: 大多数情况O(1)命中, 不匹配时回退线性扫
+    int entryIdx = -1;
+    {
+        QMutexLocker l(&m_frameMutex);
+        for (int i = 0; i < m_periodicTimers.size(); ++i) {
+            if (m_periodicTimers[i].protocolIndex == protoIndex) { entryIdx = i; break; }
+        }
+        if (entryIdx < 0) return;
+        PeriodicReply &entry = m_periodicTimers[entryIdx];
         while (entry.readyFrames.size() + entry.buildInFlight < targetDepth) {
             entry.buildInFlight++;
             quint64 buildSeq = m_nextBuildSeq.fetch_add(1);
             int idx = protoIndex;
+            int eid = entryIdx;
             QByteArray rf = reqFrame;
             QVector<ProtocolParam> rp = reqParams;
             // worker线程: 构建帧 → 加锁入队 → buildInFlight--
-            QtConcurrent::run([this, idx, buildSeq, rf, rp]() {
+            // 回主路径仍用entryIdx O(1)定位, 不做线性扫
+            QtConcurrent::run([this, idx, eid, buildSeq, rf, rp]() {
                 QByteArray frame;
                 if (idx >= 0 && idx < m_protocols.size()) {
                     const ProtocolConfig &proto = m_protocols[idx];
@@ -316,17 +306,14 @@ void SimConnection::requestPrebuild(int protoIndex, const QByteArray &reqFrame,
                     frame = proto.buildReplyFrame(buildSeq, 0, rf, rpPtr);
                 }
                 QMutexLocker l(&m_frameMutex);
-                for (auto &e : m_periodicTimers) {
-                    if (e.protocolIndex == idx) {
-                        if (!frame.isEmpty())
-                            e.readyFrames.enqueue(frame);
-                        e.buildInFlight--;
-                        break;
-                    }
+                if (eid >= 0 && eid < m_periodicTimers.size()
+                    && m_periodicTimers[eid].protocolIndex == idx) {
+                    if (!frame.isEmpty())
+                        m_periodicTimers[eid].readyFrames.enqueue(frame);
+                    m_periodicTimers[eid].buildInFlight--;
                 }
             });
         }
-        break;
     }
 }
 

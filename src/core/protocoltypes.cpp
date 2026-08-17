@@ -804,6 +804,67 @@ bool ProtocolParam::match(const QByteArray &received) const
     return false;
 }
 
+bool ProtocolParam::match(const uchar *data, int off, int size) const
+{
+    if (!matchEnabled) return true;
+    if (matchMode == MatchMode::Any) return true;
+    if (!data || off < 0 || size <= 0) return false;
+    const uchar *base = data + off;
+
+    if (matchMode == MatchMode::Range) {
+        // 范围匹配: 将size字节整数按字节序解析
+        bool be = (byteOrder == ByteOrder::BigEndian);
+        quint64 vU = 0;
+        if (size >= 8) {
+            for (int k = 0; k < 8; ++k) {
+                int idx = be ? k : (7 - k);
+                vU = (vU << 8) | (quint64)base[idx];
+            }
+        } else {
+            for (int k = 0; k < size; ++k) {
+                int idx = be ? k : (size - 1 - k);
+                vU = (vU << 8) | (quint64)base[idx];
+            }
+            // 按类型位宽做符号扩展(比较qint64时用)
+            int bit = size * 8;
+            quint64 sign = 1ULL << (bit - 1);
+            if (vU & sign) vU |= ~((1ULL << bit) - 1ULL);
+        }
+        qint64 recvVal = (qint64)vU;
+        bool ok1, ok2;
+        qint64 minVal = matchValue.toLongLong(&ok1, 0);
+        qint64 maxVal = matchValue2.toLongLong(&ok2, 0);
+        if (!ok1 || !ok2) return false;
+        return recvVal >= minVal && recvVal <= maxVal;
+    }
+
+    // Exact/Prefix/Mask: 直接拿matchValue转成expected(字节序列)做比较
+    QByteArray expected = matchValueToBytes(matchValue);
+    const char *exp = expected.constData();
+    int esz = expected.size();
+
+    if (matchMode == MatchMode::Exact) {
+        if (esz != size) return false;
+        return memcmp(base, exp, size) == 0;
+    }
+    if (matchMode == MatchMode::Prefix) {
+        if (esz > size) return false;
+        return memcmp(base, exp, esz) == 0;
+    }
+    if (matchMode == MatchMode::Mask) {
+        if (esz != size) return false;
+        QByteArray expVal = matchValueToBytes(matchValue2);
+        if (expVal.size() != size) return false;
+        const uchar *mv = (const uchar*)exp;
+        const uchar *ev = (const uchar*)expVal.constData();
+        for (int k = 0; k < size; ++k) {
+            if ((base[k] & mv[k]) != (ev[k] & mv[k])) return false;
+        }
+        return true;
+    }
+    return false;
+}
+
 QJsonObject ProtocolParam::toJson() const
 {
     QJsonObject o;
@@ -1111,6 +1172,24 @@ ReplyMode ReplyConfig::stringToMode(const QString &s)
 
 // ==================== ProtocolConfig ====================
 
+void ProtocolConfig::recalcCachedSizes()
+{
+    int hs = 0, ds = 0, rphs = 0, rpds = 0;
+    for (const auto &p : headerParams)          hs  += p.byteSize();
+    for (const auto &p : dataParams)            ds  += p.byteSize();
+    for (const auto &p : replyConfig.headerParams) rphs += p.byteSize();
+    for (const auto &p : replyConfig.dataParams)   rpds += p.byteSize();
+    cachedHeaderSize = hs;
+    cachedDataSize   = ds;
+    cachedReplyHeaderSize = rphs;
+    cachedReplyDataSize   = rpds;
+    int total = hs + ds;
+    if (fixedFrameLength > 0) total = fixedFrameLength;
+    cachedTotalFrameSize = total;
+    // minNeeded用于resync: buffer够大才允许丢第一个字节重试
+    cachedMinFrameSize   = total > 0 ? total : 1;
+}
+
 bool ProtocolConfig::isValid() const
 {
     if (isActivePush) return true;
@@ -1207,9 +1286,25 @@ QByteArray ProtocolConfig::buildReplyFrame(quint64 seq, int extraLen,
     }
 
     // 构建回复数据区(支持随机值)
-    // 预分配: 先算总大小, 一次性reserve, 避免4000个参数每次append都realloc
-    int dataSize = 0;
-    for (const auto &p : *sendData) dataSize += p.byteSize();
+    // 优先用cached sizes, 否则fallback累加 (setProtocols/fromJson都已调recalcCachedSizes)
+    int dataSize;
+    int headerSize;
+    if (sendData == &dataParams && sendHeaders == &headerParams) {
+        dataSize   = cachedDataSize;
+        headerSize = cachedHeaderSize;
+    } else {
+        dataSize   = cachedReplyDataSize;
+        headerSize = cachedReplyHeaderSize;
+    }
+    if (dataSize <= 0) {
+        dataSize = 0;
+        for (const auto &p : *sendData) dataSize += p.byteSize();
+    }
+    if (headerSize <= 0) {
+        headerSize = 0;
+        for (const auto &p : *sendHeaders) headerSize += p.byteSize();
+    }
+
     QByteArray dataArea;
     dataArea.reserve(dataSize + 16);
     for (const auto &p : *sendData) {
@@ -1218,11 +1313,6 @@ QByteArray ProtocolConfig::buildReplyFrame(quint64 seq, int extraLen,
         else
             dataArea.append(p.toBytes(seq, 0, QByteArray(), -1, -1, -1, echoMap));
     }
-
-    // 计算回复帧头总长度
-    int headerSize = 0;
-    for (const auto &p : *sendHeaders)
-        headerSize += p.byteSize();
 
     // 构建回复帧头
     QByteArray header;
@@ -1310,6 +1400,8 @@ void ProtocolConfig::fromJson(const QJsonObject &o)
     stopPeriodicProtocolNames.clear();
     QJsonArray stopArr = o["stopPeriodicProtocolNames"].toArray();
     for (const auto &v : stopArr) stopPeriodicProtocolNames.append(v.toString());
+    // 字段全改完: 刷一遍cached sizes给tryMatch/buildReplyFrame用
+    recalcCachedSizes();
 }
 
 // ==================== SceneConfig ====================
