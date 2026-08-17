@@ -1,5 +1,7 @@
 #include "simconnection.h"
 #include <QHostAddress>
+#include <QElapsedTimer>
+#include <QtConcurrent>
 
 SimConnection::SimConnection(QTcpSocket *socket, QObject *parent)
     : QObject(parent), m_socket(socket), m_seqNumber(0)
@@ -97,6 +99,16 @@ void SimConnection::tryMatch()
             QString addr = m_socket->peerAddress().toString() + ":" + QString::number(m_socket->peerPort());
             emit logMessage(QString("[匹配] 协议 '%1' 匹配成功").arg(proto.name));
 
+            // --- EchoRequest回显上下文 ---
+            // matchedFrame: 匹配到的请求帧原始字节(按前面offset累加得到的完整帧长截取)
+            QByteArray matchedFrame = m_rxBuffer.left(offset);
+            // mergedRequestParams: 帧头+数据区参数合并(供buildReplyFrame内部解析每个字段的字节偏移)
+            QVector<ProtocolParam> mergedRequestParams;
+            mergedRequestParams.reserve(proto.headerParams.size() + proto.dataParams.size());
+            for (const auto &p : proto.headerParams) mergedRequestParams.append(p);
+            for (const auto &p : proto.dataParams) mergedRequestParams.append(p);
+            const QVector<ProtocolParam> *rpPtr = mergedRequestParams.isEmpty() ? nullptr : &mergedRequestParams;
+
             // 如果该协议匹配时需要停止所有周期回复
             if (proto.stopAllPeriodicOnMatch) {
                 emit logMessage(QString("[停止] 协议 '%1' 触发停止指令，停止所有周期回复").arg(proto.name));
@@ -121,20 +133,21 @@ void SimConnection::tryMatch()
                     auto packets = QSharedPointer<QVector<MultiPacketItem>>::create(reply.multiPackets);
                     emit logMessage(QString("[多包] 协议 '%1' 开始下发 %2 个闭环包")
                                     .arg(proto.name).arg(packets->size()));
-                    sendMultiPackets(proto, packets, 0, m_seqNumber, reply.multiPacketIntervalMs);
+                    sendMultiPackets(proto, packets, 0, m_seqNumber, reply.multiPacketIntervalMs,
+                                     -1, false, matchedFrame, mergedRequestParams);
                 } else {
                     // 无多包配置: 仅发发送区回复帧
-                    QByteArray replyData = proto.buildReplyFrame(m_seqNumber++);
+                    QByteArray replyData = proto.buildReplyFrame(m_seqNumber++, 0, matchedFrame, rpPtr);
                     m_socket->write(replyData);
                     emit dataSent(replyData, addr);
                     emit logMessage(QString("[发] %1: %2").arg(addr).arg(QString::number(replyData.count())));
                 }
             } else if (effMode == ReplyMode::Periodic1s) {
-                startPeriodicReply(i, 1000);
+                startPeriodicReply(i, 1000, matchedFrame, mergedRequestParams);
             } else if (effMode == ReplyMode::Periodic5s) {
-                startPeriodicReply(i, 5000);
+                startPeriodicReply(i, 5000, matchedFrame, mergedRequestParams);
             } else if (effMode == ReplyMode::PeriodicCustom) {
-                startPeriodicReply(i, reply.customIntervalMs);
+                startPeriodicReply(i, reply.customIntervalMs, matchedFrame, mergedRequestParams);
             }
 
             anyMatched = true;
@@ -172,7 +185,9 @@ void SimConnection::tryMatch()
     }
 }
 
-void SimConnection::startPeriodicReply(int protoIndex, int intervalMs)
+void SimConnection::startPeriodicReply(int protoIndex, int intervalMs,
+                                        const QByteArray &requestFrame,
+                                        const QVector<ProtocolParam> &requestParams)
 {
     // 检查是否已经存在该协议的定时器
     for (const auto &pr : m_periodicTimers) {
@@ -183,14 +198,24 @@ void SimConnection::startPeriodicReply(int protoIndex, int intervalMs)
         if (protoIndex < 0 || protoIndex >= m_protocols.size()) return;
         const ProtocolConfig &proto = m_protocols[protoIndex];
         QString addr = m_socket->peerAddress().toString() + ":" + QString::number(m_socket->peerPort());
+        // 从PeriodicReply里取出"启动时保存的请求上下文"(用于EchoRequest回显)
+        QByteArray savedReqFrame;
+        QVector<ProtocolParam> savedReqParams;
+        const QVector<ProtocolParam> *rpPtr = nullptr;
+        PeriodicReply *prEntry = nullptr;
+        for (auto &entry : m_periodicTimers)
+            if (entry.protocolIndex == protoIndex) { prEntry = &entry; break; }
+        if (prEntry) {
+            savedReqFrame = prEntry->requestFrame;
+            savedReqParams = prEntry->requestParams;
+            if (!savedReqParams.isEmpty()) rpPtr = &savedReqParams;
+        }
         // 多包循环模式: 开启循环且有多包 → 每轮发N个闭环(每包=回复帧+多包帧)
         // 关键: 一轮所有包发完后再开始计时下一轮, 避免上轮未发完下轮又开始导致错包
         // 否则 → 只发发送区回复帧
         if (proto.replyConfig.multiPacketCycle && !proto.replyConfig.multiPackets.isEmpty()) {
             // 找到本协议的PeriodicReply条目
-            PeriodicReply *pr = nullptr;
-            for (auto &entry : m_periodicTimers)
-                if (entry.protocolIndex == protoIndex) { pr = &entry; break; }
+            PeriodicReply *pr = prEntry;
             // 防重入: 本轮还在发(理论上不会, 因为发前已停定时器), 跳过
             if (pr && pr->mpRoundInProgress) return;
             if (pr) {
@@ -201,24 +226,66 @@ void SimConnection::startPeriodicReply(int protoIndex, int intervalMs)
             emit logMessage(QString("[多包循环] 协议 '%1' 周期触发, 发送 %2 个闭环包")
                             .arg(proto.name).arg(packets->size()));
             sendMultiPackets(proto, packets, 0, m_seqNumber, proto.replyConfig.multiPacketIntervalMs,
-                             protoIndex, true);
+                             protoIndex, true, savedReqFrame, savedReqParams);
         } else {
-            QByteArray replyData = proto.buildReplyFrame(m_seqNumber++);
+            // --- 异步预构建帧队列: 从readyFrames取帧, 不阻塞定时器 ---
+            QByteArray replyData;
+            bool fromPrebuilt = false;
+            {
+                QMutexLocker l(&m_frameMutex);
+                for (auto &entry : m_periodicTimers) {
+                    if (entry.protocolIndex == protoIndex && !entry.readyFrames.isEmpty()) {
+                        replyData = entry.readyFrames.dequeue();
+                        fromPrebuilt = true;
+                        break;
+                    }
+                }
+            }
+
+            qint64 buildNs = 0;
+            if (!fromPrebuilt) {
+                // 队列空: 降级同步构建
+                quint64 seq = m_nextBuildSeq.fetch_add(1);
+                QElapsedTimer tb; tb.start();
+                replyData = proto.buildReplyFrame(seq, 0, savedReqFrame, rpPtr);
+                buildNs = tb.nsecsElapsed();
+            }
+
+            // 补充预构建队列(异步)
+            requestPrebuild(protoIndex, savedReqFrame, savedReqParams);
+
+            QElapsedTimer twrite; twrite.start();
             m_socket->write(replyData);
+            qint64 writeNs = twrite.nsecsElapsed();
             emit dataSent(replyData, addr);
+            if (replyData.size() > 512 || buildNs > 1000000LL || !fromPrebuilt) {
+                emit logMessage(QString("[性能] '%1' %2B  构建:%3μs  write:%4μs  %5")
+                                .arg(proto.name)
+                                .arg(replyData.size())
+                                .arg(fromPrebuilt ? 0 : buildNs / 1000)
+                                .arg(writeNs / 1000)
+                                .arg(fromPrebuilt ? QStringLiteral("(预构建)") : QStringLiteral("(同步降级)")));
+            }
             emit logMessage(QString("[发] %1: %2").arg(addr).arg(QString::number(replyData.count())));
         }
     };
 
     QTimer *timer = new QTimer(this);
     timer->setProperty("protoIndex", protoIndex);
+    // 短间隔必须用PreciseTimer, 否则Qt默认CoarseTimer会把100ms合并成500ms级调度
+    timer->setTimerType(Qt::PreciseTimer);
     connect(timer, &QTimer::timeout, doReply);
     timer->start(intervalMs);
 
     PeriodicReply reply;
     reply.protocolIndex = protoIndex;
     reply.timer = timer;
+    reply.requestFrame = requestFrame;
+    reply.requestParams = requestParams;
     m_periodicTimers.append(reply);
+
+    // 启动前预构建2帧, 填充队列(异步, 不阻塞)
+    requestPrebuild(protoIndex, requestFrame, requestParams);
 
     // 立即发送一次
     doReply();
@@ -227,15 +294,55 @@ void SimConnection::startPeriodicReply(int protoIndex, int intervalMs)
                     .arg(m_protocols[protoIndex].name).arg(intervalMs));
 }
 
+void SimConnection::requestPrebuild(int protoIndex, const QByteArray &reqFrame,
+                                     const QVector<ProtocolParam> &reqParams, int targetDepth)
+{
+    // 在mutex内提交build任务, 保证readyFrames/buildInFlight的线程安全
+    QMutexLocker l(&m_frameMutex);
+    for (auto &entry : m_periodicTimers) {
+        if (entry.protocolIndex != protoIndex) continue;
+        while (entry.readyFrames.size() + entry.buildInFlight < targetDepth) {
+            entry.buildInFlight++;
+            quint64 buildSeq = m_nextBuildSeq.fetch_add(1);
+            int idx = protoIndex;
+            QByteArray rf = reqFrame;
+            QVector<ProtocolParam> rp = reqParams;
+            // worker线程: 构建帧 → 加锁入队 → buildInFlight--
+            QtConcurrent::run([this, idx, buildSeq, rf, rp]() {
+                QByteArray frame;
+                if (idx >= 0 && idx < m_protocols.size()) {
+                    const ProtocolConfig &proto = m_protocols[idx];
+                    const QVector<ProtocolParam> *rpPtr = rp.isEmpty() ? nullptr : &rp;
+                    frame = proto.buildReplyFrame(buildSeq, 0, rf, rpPtr);
+                }
+                QMutexLocker l(&m_frameMutex);
+                for (auto &e : m_periodicTimers) {
+                    if (e.protocolIndex == idx) {
+                        if (!frame.isEmpty())
+                            e.readyFrames.enqueue(frame);
+                        e.buildInFlight--;
+                        break;
+                    }
+                }
+            });
+        }
+        break;
+    }
+}
+
 
 
 void SimConnection::stopAllPeriodicReplies()
 {
+    // 加锁: 防止worker线程回来入队时m_periodicTimers已被修改
+    QMutexLocker l(&m_frameMutex);
     for (auto &pr : m_periodicTimers) {
         if (pr.timer) {
             pr.timer->stop();
             delete pr.timer;
+            pr.timer = nullptr;
         }
+        pr.readyFrames.clear();
     }
     m_periodicTimers.clear();
 }
@@ -252,22 +359,45 @@ void SimConnection::stopPeriodicReplyByName(const QString &name)
     }
     if (protoIndex < 0) return;
 
-    // 停止对应的定时器
+    // 停止对应的定时器(加锁: 与worker线程的入队操作互斥)
+    QMutexLocker l(&m_frameMutex);
     for (int i = m_periodicTimers.size() - 1; i >= 0; --i) {
         if (m_periodicTimers[i].protocolIndex == protoIndex) {
             if (m_periodicTimers[i].timer) {
                 m_periodicTimers[i].timer->stop();
                 delete m_periodicTimers[i].timer;
+                m_periodicTimers[i].timer = nullptr;
             }
+            m_periodicTimers[i].readyFrames.clear();
             m_periodicTimers.removeAt(i);
         }
     }
 }
 
+// 辅助: 在simconnection层也复用buildEchoMap便于MultiPacketItem::buildFrame传echoMap
+static QMap<QString, QByteArray> scBuildEchoMap(const QVector<ProtocolParam> *requestParams,
+                                                 const QByteArray &requestFrame)
+{
+    QMap<QString, QByteArray> m;
+    if (!requestParams || requestFrame.isEmpty()) return m;
+    int off = 0;
+    // requestParams在这里实际是headerParams+dataParams的合并(由调用方提前准备好)
+    for (const auto &p : *requestParams) {
+        int sz = p.byteSize();
+        if (off + sz <= requestFrame.size() && !p.name.isEmpty()) {
+            m.insert(p.name, requestFrame.mid(off, sz));
+        }
+        off += sz;
+    }
+    return m;
+}
+
 void SimConnection::sendMultiPackets(const ProtocolConfig &proto,
                                      const QSharedPointer<QVector<MultiPacketItem>> packets,
                                      int startIndex, quint64 seq, int intervalMs,
-                                     int protoIndex, bool cycleReschedule)
+                                     int protoIndex, bool cycleReschedule,
+                                     const QByteArray &requestFrame,
+                                     const QVector<ProtocolParam> &requestParams)
 {
     // 提前返回时(cycle模式): 恢复标志并重启定时器, 避免循环静默停滞
     auto abortCycleSafe = [this, protoIndex]() {
@@ -291,14 +421,19 @@ void SimConnection::sendMultiPackets(const ProtocolConfig &proto,
     int total = packets->size();
     QString addr = m_socket->peerAddress().toString() + ":" + QString::number(m_socket->peerPort());
 
+    // 构建回显映射(EchoRequest): requestParams是headerParams+dataParams合并
+    const QVector<ProtocolParam> *rpPtr = requestParams.isEmpty() ? nullptr : &requestParams;
+    QMap<QString, QByteArray> localEchoMap = scBuildEchoMap(rpPtr, requestFrame);
+    const QMap<QString, QByteArray> *echoMap = localEchoMap.isEmpty() ? nullptr : &localEchoMap;
+
     // 2. 先构建本包多包帧(动态字段PacketIndex/TotalPackets/PacketSize自动填充; 包序号1-based)
     //    为什么要先建包帧: 回复帧的Length动态字段在分包模式下需包含本包帧长度, 故先算出包帧大小
     const MultiPacketItem &item = packets->at(startIndex);
-    QByteArray pktFrame = item.buildFrame(seq, startIndex + 1, total);
+    QByteArray pktFrame = item.buildFrame(seq, startIndex + 1, total, echoMap);
 
     // 1. 发送发送区回复帧(每包都发, 构成完整闭环)
     //    分包模式: Length动态字段 = 回复区(包头+数据区) + 本包(包头+数据区); 不分包时extraLen=0
-    QByteArray replyFrame =  proto.buildReplyFrame(seq, pktFrame.size());
+    QByteArray replyFrame = proto.buildReplyFrame(seq, pktFrame.size(), requestFrame, requestParams);
 //    m_socket->write(replyFrame);
 //    emit dataSent(replyFrame, addr);
 //    emit logMessage(QString("[多包闭环 %1/%2] 发送区回复帧: %3")
@@ -315,15 +450,15 @@ void SimConnection::sendMultiPackets(const ProtocolConfig &proto,
     // 序列号递增(供下一包使用)
     m_seqNumber = seq + 1;
 
-    // 调度下一包
+    // 调度下一包(捕获requestFrame/requestParams按值, 保证异步触发时数据仍有效)
     if (startIndex + 1 < total) {
         int delay = item.delayMs > 0 ? item.delayMs : intervalMs;
         if (delay < 0) delay = 0;
         quint64 nextSeq = seq + 1;
         QTimer::singleShot(delay, this, [this, proto, packets, startIndex, nextSeq, intervalMs,
-                                         protoIndex, cycleReschedule]() {
+                                         protoIndex, cycleReschedule, requestFrame, requestParams]() {
             sendMultiPackets(proto, packets, startIndex + 1, nextSeq, intervalMs,
-                             protoIndex, cycleReschedule);
+                             protoIndex, cycleReschedule, requestFrame, requestParams);
         });
     } else {
         // 本轮所有包已发完

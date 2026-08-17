@@ -44,7 +44,8 @@ enum class DynamicType {
     Sequence,     // 自增序列号
     PacketIndex,  // 分包序号(当前包在分包中的索引,0-based)
     PacketSize,   // 分包大小(当前包负载字节数)
-    TotalPackets  // 总包数
+    TotalPackets, // 总包数
+    EchoRequest   // 回显请求字段: 从匹配到的请求帧中按echoRefName取对应字段的字节原样返回(找不到则回退defaultValue)
 };
 
 // 匹配模式
@@ -94,6 +95,10 @@ struct ProtocolParam {
     // 子字段的arrayCount固定为1(不支持嵌套结构体数组)
     QVector<ProtocolParam> subFields;
 
+    // 回显引用的请求参数名(仅dynamicType==EchoRequest时用)
+    // 在回复参数中设置后: 匹配到请求帧时, 原样返回请求帧中同名参数的字节
+    QString echoRefName;
+
     ProtocolParam()
         : type(ParamType::UInt16)
         , byteOrder(ByteOrder::BigEndian)
@@ -111,9 +116,11 @@ struct ProtocolParam {
     int byteSize() const;
     // 将默认值转为字节序列
     // packetIndex/packetSize/totalPackets: 分包上下文(-1=非分包模式)
-    QByteArray toBytes(quint64 seq = 0, int dataAreaLen = 0, 
+    // echoMap: 请求帧的参数字节映射(name→bytes, 为空表示无请求上下文如主动上报/周期模式)
+    QByteArray toBytes(quint64 seq = 0, int dataAreaLen = 0,
                        const QByteArray &fullFrame = QByteArray(),
-                       int packetIndex = -1, int packetSize = -1, int totalPackets = -1) const;
+                       int packetIndex = -1, int packetSize = -1, int totalPackets = -1,
+                       const QMap<QString, QByteArray> *echoMap = nullptr) const;
     // 单元素(非动态)按指定字符串值转字节(供数组逐元素生成)
     QByteArray singleElementToBytes(const QString &val) const;
     // 解析默认值字符串为字符串列表(JSON数组返回多个, 否则返回单个原值)
@@ -142,6 +149,19 @@ struct ProtocolParam {
     static MatchMode stringToMatchMode(const QString &s);
 };
 
+// 预览模式RAII哨兵: 构造时进入预览模式, 析构时退出
+// 预览模式下 ProtocolParam::toRandomBytes 不会生成真随机字节, 而是返回0xA5占位pattern
+// — 对超大数组(如2000频点)的预览性能影响巨大: 从 ~100ms 降至 <1ms, 真实发送路径不受影响
+class PreviewModeSentry {
+public:
+    PreviewModeSentry();
+    ~PreviewModeSentry();
+    PreviewModeSentry(const PreviewModeSentry&) = delete;
+    PreviewModeSentry& operator=(const PreviewModeSentry&) = delete;
+    // 判断当前是否处于预览模式(toRandomBytes内部调用)
+    static bool isActive();
+};
+
 // 多包项(每包独立配置字段; MultiPacket回复模式使用)
 // 每个包有自己的帧头/数据区参数; 字段可设动态类型=PacketIndex(包序号)/TotalPackets(总包数)/PacketSize(本包字节数)
 // 发送时按列表顺序逐包发送, 动态字段自动填充, 非动态字段用默认值
@@ -156,7 +176,9 @@ struct MultiPacketItem {
     QJsonObject toJson() const;
     void fromJson(const QJsonObject &obj);
     // 构建本包帧; packetIndex/totalPackets用于动态字段自动填充
-    QByteArray buildFrame(quint64 seq, int packetIndex, int totalPackets) const;
+    // echoMap: 请求帧参数字节映射(用于EchoRequest字段回显)
+    QByteArray buildFrame(quint64 seq, int packetIndex, int totalPackets,
+                          const QMap<QString, QByteArray> *echoMap = nullptr) const;
 };
 
 // 回复配置
@@ -202,7 +224,12 @@ struct ProtocolConfig {
     // 构建回复帧
     // extraLen: 分包模式下, Length动态字段需额外包含的本包帧字节数(=本包包头+数据区)
     //           非分包场景传0, Length=回复区(包头+数据区)
-    QByteArray buildReplyFrame(quint64 seq = 0, int extraLen = 0) const;
+    // requestFrame: 匹配到的请求帧原始字节(有请求上下文时传入, 用于EchoRequest回显)
+    // requestParams: 请求帧的参数列表(帧头+数据区, 和requestFrame配合解析出各字段字节用于回显)
+    //                传空则无法回显, EchoRequest字段回退defaultValue
+    QByteArray buildReplyFrame(quint64 seq = 0, int extraLen = 0,
+                               const QByteArray &requestFrame = QByteArray(),
+                               const QVector<ProtocolParam> *requestParams = nullptr) const;
 
     QJsonObject toJson() const;
     void fromJson(const QJsonObject &obj);

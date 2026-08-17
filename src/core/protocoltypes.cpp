@@ -4,6 +4,15 @@
 #include <QJsonDocument>
 #include <cmath>
 
+// ==================== PreviewModeSentry ====================
+// 预览模式全局标志 — 仅 UI 预览期间为 true, 真实发送(toRandomBytes)跳过随机数生成改为0xA5占位pattern
+// 显著降低大数组预览开销(例如2000频点随机生成从~100ms → <1ms)
+static bool g_previewMode = false;
+static int g_previewNest  = 0; // 支持嵌套(比如预览里又递归构帧)
+PreviewModeSentry::PreviewModeSentry() { ++g_previewNest; g_previewMode = true; }
+PreviewModeSentry::~PreviewModeSentry() { --g_previewNest; if (g_previewNest <= 0) { g_previewNest = 0; g_previewMode = false; } }
+bool PreviewModeSentry::isActive() { return g_previewMode; }
+
 // ==================== ProtocolParam ====================
 
 int ProtocolParam::byteSize() const
@@ -45,7 +54,8 @@ int ProtocolParam::byteSize() const
 }
 
 QByteArray ProtocolParam::toBytes(quint64 seq, int dataAreaLen, const QByteArray &fullFrame,
-                                  int packetIndex, int packetSize, int totalPackets) const
+                                  int packetIndex, int packetSize, int totalPackets,
+                                  const QMap<QString, QByteArray> *echoMap) const
 {
     // 结构体数组: 交错布局 a0 b0 a1 b1 ...
     // 每个结构体实例遍历subFields, isRandom的用toRandomBytes, 否则用toBytes(各自defaultValue)
@@ -57,10 +67,31 @@ QByteArray ProtocolParam::toBytes(quint64 seq, int dataAreaLen, const QByteArray
                 if (sf.isRandom)
                     result += sf.toRandomBytes();
                 else
-                    result += sf.toBytes(seq, 0, QByteArray(), packetIndex, packetSize, totalPackets);
+                    result += sf.toBytes(seq, 0, QByteArray(), packetIndex, packetSize, totalPackets, echoMap);
             }
         }
         return result;
+    }
+
+    // 回显请求帧字段: 从echoMap中按echoRefName取出对应字段的字节原样返回
+    // 找不到(比如主动上报/周期模式无请求上下文)或字节数不一致 → 回退defaultValue
+    if (dynamicType == DynamicType::EchoRequest) {
+        if (echoMap && !echoRefName.isEmpty()) {
+            auto it = echoMap->find(echoRefName);
+            if (it != echoMap->end()) {
+                const QByteArray &raw = it.value();
+                int mySize = byteSize();
+                // 字节数吻合: 原样返回
+                if (raw.size() == mySize || raw.isEmpty())
+                    return raw;
+                // 字节数不吻合: 截断或零填充到本参数字节数(避免错位)
+                QByteArray out = raw;
+                if (out.size() > mySize) out.truncate(mySize);
+                while (out.size() < mySize) out.append('\0');
+                return out;
+            }
+        }
+        // 无请求上下文或找不到: 回退默认值(走下面的默认值构建逻辑)
     }
 
     // 处理动态类型
@@ -320,19 +351,193 @@ QStringList ProtocolParam::parseDefaultValues() const
     return parseDefaultValuesFromString(defaultValue);
 }
 
+// 随机范围生成: 支持64位范围, 避免原来 quint32(range+1) 的溢出截断
+static inline quint64 randRange64(quint64 lo, quint64 hi) {
+    if (hi <= lo) return lo;
+    quint64 range = hi - lo;
+    if (range <= 0xFFFFFFFFULL) {
+        // 32位范围内直接用bounded(quint32) — QRandomGenerator原生支持, 无偏差
+        return lo + QRandomGenerator::global()->bounded((quint32)(range + 1));
+    }
+    // >32位: 用双生成 + 取模(有轻微偏差但64位范围工程上可接受, 且比quint32截断正确)
+    quint64 r64 = ((quint64)QRandomGenerator::global()->generate() << 32)
+                   | (quint64)QRandomGenerator::global()->generate();
+    return lo + r64 % (range + 1);
+}
+
+// 小端写入辅助: 直接写原始字节, 免去每个元素构造QDataStream的开销
+static inline void writeIntLE(uchar *p, quint64 val, int elemSize) {
+    for (int k = 0; k < elemSize; ++k) { p[k] = (uchar)(val & 0xFF); val >>= 8; }
+}
+static inline void writeIntBE(uchar *p, quint64 val, int elemSize) {
+    for (int k = elemSize - 1; k >= 0; --k) { p[k] = (uchar)(val & 0xFF); val >>= 8; }
+}
+
 QByteArray ProtocolParam::toRandomBytes() const
 {
+    // 预览模式快速路径: 不生成真随机, 返回 0xA5 占位pattern.
+    // 2000频点/大数组场景下预览帧生成从~100ms降到<1ms, 用户仍可从预览看出长度/结构/偏移是否正确.
+    if (Q_UNLIKELY(PreviewModeSentry::isActive())) {
+        int totalBytes = byteSize();
+        if (totalBytes <= 0) return QByteArray();
+        QByteArray out(totalBytes, 0);
+        uchar *p = (uchar*)out.data();
+        // 用 0xA5 / 0x5A 交替 pattern — 非全0也非全FF, 看一眼就知道这是"预览占位值"
+        for (int i = 0; i < totalBytes; ++i)
+            p[i] = (i & 1) ? 0x5Au : 0xA5u;
+        return out;
+    }
+
     // 结构体数组: 随机性由各子字段独立决定(子字段isRandom控制), 外层isRandom无意义
     // 交错布局: field0[0] field1[0] field0[1] field1[1] ...
     if (type == ParamType::StructArray) {
         int count = arrayCount > 0 ? arrayCount : 1;
-        QByteArray result;
+        if (count <= 0) return QByteArray();
+        // --- 快速预览模式: 整体一块0xA5/0x5A pattern, 跳过所有子字段遍历 ---
+        if (Q_UNLIKELY(PreviewModeSentry::isActive())) {
+            int perStructSize = 0;
+            for (const auto &sf : subFields) perStructSize += sf.byteSize();
+            int total = count * perStructSize;
+            QByteArray out(total, 0);
+            uchar *p = (uchar*)out.data();
+            for (int i = 0; i < total; ++i) p[i] = (i & 1) ? 0x5Au : 0xA5u;
+            return out;
+        }
+
+        // --- 正常模式: 一次性"每个子字段信息"预解析, 然后count次循环内联写 ---
+        // 避免原来 count×|subFields| 次递归调用 sf.toRandomBytes()/sf.toBytes()
+        // — 原本会带来 O(N) 次QByteArray小分配 + O(N) 次randomMin/randomMax字符串重复解析
+        struct SfSpec {
+            int  elemSize;             // 本字段每实例字节数 (sf.byteSize(), subField的arrayCount固定=1)
+            bool isRandom;             // 是否生成随机值(否则取defaultValue的固定字节)
+            bool bigEnd;
+
+            // 非随机固定字节缓存(长度=elemSize) — 避免每个实例都调用sf.toBytes()
+            QByteArray fixedBytes;
+
+            // 随机分支: 类型分类(INT / FLOAT / BYTES)
+            enum class Kind { Int, Float, Bytes };
+            Kind kind;
+
+            // INT类随机: loU/hiU为随机范围(uint64形式), mask截断到elemSize位宽
+            quint64 loU, hiU, mask;
+            // FLOAT类随机: minF/maxF
+            double  minF, maxF;
+            // BYTES类随机: rawLen = elemSize(randomLength<=0时) 或 randomLength
+            int rawLen;
+        };
+
+        QVarLengthArray<SfSpec, 8> specs;
+        specs.resize(subFields.size());
+        int perStructSize = 0;
+
+        for (int k = 0; k < subFields.size(); ++k) {
+            const auto &sf = subFields[k];
+            SfSpec &s = specs[k];
+            s.elemSize = sf.byteSize();
+            if (s.elemSize <= 0) s.elemSize = 1;
+            perStructSize += s.elemSize;
+            s.isRandom = sf.isRandom;
+            s.bigEnd   = (sf.byteOrder == ByteOrder::BigEndian);
+
+            if (!s.isRandom) {
+                s.fixedBytes = sf.toBytes(); // 非随机: 只算一次并缓存
+                // 对齐到 elemSize(防止返回不一致, 虽然toBytes正常时应等于byteSize)
+                if (s.fixedBytes.size() != s.elemSize) {
+                    if (s.fixedBytes.size() > s.elemSize) s.fixedBytes.truncate(s.elemSize);
+                    else while (s.fixedBytes.size() < s.elemSize) s.fixedBytes.append('\0');
+                }
+                continue;
+            }
+
+            // --- 随机: 分类并一次性解析范围 ---
+            if (sf.type == ParamType::Bytes || sf.type == ParamType::Hex) {
+                s.kind   = SfSpec::Kind::Bytes;
+                s.rawLen = sf.randomLength;
+                if (s.rawLen <= 0) s.rawLen = s.elemSize;
+            } else if (sf.type == ParamType::Float32 || sf.type == ParamType::Float64) {
+                s.kind   = SfSpec::Kind::Float;
+                s.minF = sf.randomMin.isEmpty() ? 0.0 : sf.randomMin.toDouble();
+                s.maxF = sf.randomMax.isEmpty() ? 1.0 : sf.randomMax.toDouble();
+                if (s.maxF < s.minF) std::swap(s.minF, s.maxF);
+            } else {
+                // 整型: UInt8/16/32/64, Int8/16/32/64
+                s.kind = SfSpec::Kind::Int;
+                bool okMin, okMax;
+                qint64 minV = sf.randomMin.toLongLong(&okMin, 0);
+                if (!okMin) minV = 0;
+                qint64 maxV = sf.randomMax.toLongLong(&okMax, 0);
+                if (!okMax) maxV = 65535;
+                if (maxV < minV) std::swap(minV, maxV);
+                s.loU  = (quint64)minV;
+                s.hiU  = (quint64)maxV;
+                s.mask = (s.elemSize >= 8) ? 0xFFFFFFFFFFFFFFFFULL
+                                           : ((1ULL << (s.elemSize * 8)) - 1ULL);
+            }
+        }
+
+        int total = count * perStructSize;
+        QByteArray result(total, 0);
+        uchar *dst = (uchar*)result.data();
+        QRandomGenerator *rng = QRandomGenerator::global();
+
         for (int i = 0; i < count; ++i) {
-            for (const auto &sf : subFields) {
-                if (sf.isRandom)
-                    result += sf.toRandomBytes();
-                else
-                    result += sf.toBytes();
+            for (int k = 0; k < specs.size(); ++k) {
+                SfSpec &s = specs[k];
+                uchar *wp = dst;
+                int sz = s.elemSize;
+
+                if (!s.isRandom) {
+                    // 非随机: 直接memcpy缓存好的固定字节
+                    if (Q_LIKELY(sz == s.fixedBytes.size()))
+                        memcpy(wp, s.fixedBytes.constData(), sz);
+                    dst += sz;
+                    continue;
+                }
+
+                switch (s.kind) {
+                case SfSpec::Kind::Bytes: {
+                    int len = s.rawLen;
+                    if (len > sz) len = sz;
+                    // 批量填4字节对齐 + 尾字节
+                    rng->fillRange((quint32*)wp, len / 4);
+                    int tail = len & 3;
+                    if (tail) {
+                        uchar *tp = wp + (len - tail);
+                        quint32 v = rng->generate();
+                        for (int m = 0; m < tail; ++m) { tp[m] = (uchar)(v & 0xFF); v >>= 8; }
+                    }
+                    // 剩余超过rawLen的字节(只有rawLen<elemSize时)填0
+                    if (len < sz) memset(wp + len, 0, sz - len);
+                    dst += sz;
+                    break;
+                }
+                case SfSpec::Kind::Float: {
+                    double r = rng->generateDouble();
+                    double val = s.minF + r * (s.maxF - s.minF);
+                    if (sz <= 4) {
+                        float fv = (float)val;
+                        quint32 bits; memcpy(&bits, &fv, 4);
+                        if (s.bigEnd) writeIntBE(wp, bits, 4);
+                        else          writeIntLE(wp, bits, 4);
+                    } else {
+                        quint64 bits; memcpy(&bits, &val, 8);
+                        if (s.bigEnd) writeIntBE(wp, bits, 8);
+                        else          writeIntLE(wp, bits, 8);
+                    }
+                    dst += sz;
+                    break;
+                }
+                default: // SfSpec::Kind::Int
+                {
+                    quint64 v = randRange64(s.loU, s.hiU);
+                    v &= s.mask;
+                    if (s.bigEnd) writeIntBE(wp, v, sz);
+                    else          writeIntLE(wp, v, sz);
+                    dst += sz;
+                    break;
+                }
+                }
             }
         }
         return result;
@@ -341,66 +546,88 @@ QByteArray ProtocolParam::toRandomBytes() const
     if (!isRandom) return toBytes();
 
     int count = arrayCount > 0 ? arrayCount : 1;
+    if (count <= 0) count = 1;
 
+    // --- 路径1: Bytes/Hex raw bytes 批量填随机 ---
     if (type == ParamType::Bytes || type == ParamType::Hex) {
         int len = randomLength;
         if (len <= 0) len = byteSize();
         QByteArray data(len, 0);
-        for (int i = 0; i < len; ++i)
-            data[i] = (char)QRandomGenerator::global()->bounded(256);
+        if (len > 0) {
+            // QRandomGenerator::fillRange 填整个buffer — 比逐字节bounded(256)快1个数量级
+            QRandomGenerator::global()->fillRange((quint32*)data.data(), len / 4);
+            int tail = len & 3;
+            if (tail) {
+                uchar *tp = (uchar*)data.data() + (len - tail);
+                quint32 v = QRandomGenerator::global()->generate();
+                for (int k = 0; k < tail; ++k) { tp[k] = (uchar)(v & 0xFF); v >>= 8; }
+            }
+        }
         return data;
     }
 
-    // 生成单个随机元素的字节
-    auto genSingleRandom = [this, count]() -> QByteArray {
-        if (type == ParamType::Float32 || type == ParamType::Float64) {
-            double minVal = randomMin.isEmpty() ? 0.0 : randomMin.toDouble();
-            double maxVal = randomMax.isEmpty() ? 1.0 : randomMax.toDouble();
-            double r = QRandomGenerator::global()->generateDouble();
-            double val = minVal + r * (maxVal - minVal);
+    bool bigEnd = (byteOrder == ByteOrder::BigEndian);
 
-            QByteArray data;
-            QDataStream ds(&data, QIODevice::WriteOnly);
-            ds.setByteOrder(byteOrder == ByteOrder::BigEndian ? QDataStream::BigEndian : QDataStream::LittleEndian);
-            if (type == ParamType::Float32) {
-                ds.setFloatingPointPrecision(QDataStream::SinglePrecision);
-                ds << (float)val;
-            } else {
-                ds.setFloatingPointPrecision(QDataStream::DoublePrecision);
-                ds << val;
-            }
-            return data;
-        }
-
-        // 整数类型随机
-        bool ok;
-        qint64 minVal = randomMin.toLongLong(&ok, 0);
-        if (!ok) minVal = 0;
-        qint64 maxVal = randomMax.toLongLong(&ok, 0);
-        if (!ok) maxVal = 65535;
+    // --- 路径2: 浮点 Float32/Float64 ---
+    if (type == ParamType::Float32 || type == ParamType::Float64) {
+        double minVal = randomMin.isEmpty() ? 0.0 : randomMin.toDouble();
+        double maxVal = randomMax.isEmpty() ? 1.0 : randomMax.toDouble();
         if (maxVal < minVal) std::swap(minVal, maxVal);
+        int elemSize = (type == ParamType::Float32) ? 4 : 8;
+        int total = elemSize * count;
+        QByteArray result(total, 0);
+        uchar *p = (uchar*)result.data();
+        QRandomGenerator *rng = QRandomGenerator::global();
+        for (int i = 0; i < count; ++i) {
+            double r = rng->generateDouble();
+            double val = minVal + r * (maxVal - minVal);
+            if (type == ParamType::Float32) {
+                float fv = (float)val;
+                // 通过 memcpy 到 uchar* 保持与平台无关, 避免QDataStream开销
+                quint32 bits;
+                memcpy(&bits, &fv, 4);
+                if (bigEnd) writeIntBE(p + i*4, bits, 4);
+                else        writeIntLE(p + i*4, bits, 4);
+            } else {
+                quint64 bits;
+                memcpy(&bits, &val, 8);
+                if (bigEnd) writeIntBE(p + i*8, bits, 8);
+                else        writeIntLE(p + i*8, bits, 8);
+            }
+        }
+        return result;
+    }
 
-        quint64 range = (quint64)(maxVal - minVal);
-        quint64 val = (quint64)minVal + (range > 0 ? QRandomGenerator::global()->bounded((quint32)(range + 1)) : 0);
+    // --- 路径3: 整型 (UInt8/16/32/64, Int8/16/32/64) — 热点路径, 2000频点的情况 ---
+    // 只解析一次min/max字符串, 而非每个元素都解析
+    bool okMin, okMax;
+    qint64 minVal = randomMin.toLongLong(&okMin, 0);
+    if (!okMin) minVal = 0;
+    qint64 maxVal = randomMax.toLongLong(&okMax, 0);
+    if (!okMax) maxVal = 65535;
+    if (maxVal < minVal) std::swap(minVal, maxVal);
+    quint64 loU = (quint64)minVal;
+    quint64 hiU = (quint64)maxVal;
 
-        QByteArray data;
-        QDataStream ds(&data, QIODevice::WriteOnly);
-        ds.setByteOrder(byteOrder == ByteOrder::BigEndian ? QDataStream::BigEndian : QDataStream::LittleEndian);
-
-        int singleSz = byteSize() / count;
-        if (singleSz <= 1) ds << (quint8)val;
-        else if (singleSz <= 2) ds << (quint16)val;
-        else if (singleSz <= 4) ds << (quint32)val;
-        else ds << (quint64)val;
-        return data;
-    };
-
-    QByteArray single = genSingleRandom();
-    if (count <= 1) return single;
-    QByteArray result;
-    result.reserve(single.size() * count);
-    for (int i = 0; i < count; ++i)
-        result += genSingleRandom();
+    int elemSize = byteSize() / count;
+    if (elemSize <= 0) elemSize = 1;
+    int total = elemSize * count;
+    QByteArray result(total, 0);
+    uchar *p = (uchar*)result.data();
+    // elemSize 截断掩码: 比如 elemSize=2 就 mask=0xFFFF, 防止超出类型位宽
+    quint64 mask = (elemSize >= 8) ? 0xFFFFFFFFFFFFFFFFULL
+                                   : ((1ULL << (elemSize*8)) - 1ULL);
+    if (bigEnd) {
+        for (int i = 0; i < count; ++i) {
+            quint64 v = randRange64(loU, hiU) & mask;
+            writeIntBE(p + i*elemSize, v, elemSize);
+        }
+    } else {
+        for (int i = 0; i < count; ++i) {
+            quint64 v = randRange64(loU, hiU) & mask;
+            writeIntLE(p + i*elemSize, v, elemSize);
+        }
+    }
     return result;
 }
 
@@ -596,6 +823,9 @@ QJsonObject ProtocolParam::toJson() const
     o["randomMin"] = randomMin;
     o["randomMax"] = randomMax;
     o["randomLength"] = randomLength;
+    // EchoRequest回显引用参数名
+    if (!echoRefName.isEmpty())
+        o["echoRefName"] = echoRefName;
     // 结构体数组子字段(仅StructArray类型有内容)
     if (type == ParamType::StructArray && !subFields.isEmpty()) {
         QJsonArray sfArr;
@@ -623,6 +853,7 @@ void ProtocolParam::fromJson(const QJsonObject &o)
     randomMin = o["randomMin"].toString();
     randomMax = o["randomMax"].toString();
     randomLength = o["randomLength"].toInt(8);
+    echoRefName = o["echoRefName"].toString();
     // 结构体数组子字段
     subFields.clear();
     QJsonArray sfArr = o["subFields"].toArray();
@@ -692,6 +923,7 @@ QString ProtocolParam::dynamicTypeToString(DynamicType d)
     case DynamicType::PacketIndex: return "PacketIndex";
     case DynamicType::PacketSize: return "PacketSize";
     case DynamicType::TotalPackets: return "TotalPackets";
+    case DynamicType::EchoRequest: return "EchoRequest";
     }
     return "None";
 }
@@ -705,6 +937,7 @@ DynamicType ProtocolParam::stringToDynamicType(const QString &s)
     if (s == "PacketIndex") return DynamicType::PacketIndex;
     if (s == "PacketSize") return DynamicType::PacketSize;
     if (s == "TotalPackets") return DynamicType::TotalPackets;
+    if (s == "EchoRequest") return DynamicType::EchoRequest;
     return DynamicType::None;
 }
 
@@ -731,7 +964,8 @@ MatchMode ProtocolParam::stringToMatchMode(const QString &s)
 
 // ==================== MultiPacketItem ====================
 
-QByteArray MultiPacketItem::buildFrame(quint64 seq, int packetIndex, int totalPackets) const
+QByteArray MultiPacketItem::buildFrame(quint64 seq, int packetIndex, int totalPackets,
+                                       const QMap<QString, QByteArray> *echoMap) const
 {
     // 先构建数据区
     QByteArray dataArea;
@@ -739,7 +973,7 @@ QByteArray MultiPacketItem::buildFrame(quint64 seq, int packetIndex, int totalPa
         if (p.isRandom)
             dataArea += p.toRandomBytes();
         else
-            dataArea += p.toBytes(seq, 0, QByteArray(), packetIndex, dataArea.size(), totalPackets);
+            dataArea += p.toBytes(seq, 0, QByteArray(), packetIndex, dataArea.size(), totalPackets, echoMap);
     }
 
     int pktSize = dataArea.size(); // 本包数据区字节数(PacketSize动态字段用)
@@ -758,7 +992,7 @@ QByteArray MultiPacketItem::buildFrame(quint64 seq, int packetIndex, int totalPa
             int len = dataArea.size();
             if (p.dynamicType == DynamicType::Length)
                 len = dataArea.size() + headerSize;
-            header += p.toBytes(seq, len, QByteArray(), packetIndex, pktSize, totalPackets);
+            header += p.toBytes(seq, len, QByteArray(), packetIndex, pktSize, totalPackets, echoMap);
         }
     }
 
@@ -769,7 +1003,7 @@ QByteArray MultiPacketItem::buildFrame(quint64 seq, int packetIndex, int totalPa
     int hdrOffset = 0;
     for (const auto &p : headerParams) {
         if (p.dynamicType == DynamicType::Checksum) {
-            finalFrame += p.toBytes(seq, dataArea.size(), frame, packetIndex, pktSize, totalPackets);
+            finalFrame += p.toBytes(seq, dataArea.size(), frame, packetIndex, pktSize, totalPackets, echoMap);
         } else {
             finalFrame += frame.mid(hdrOffset, p.byteSize());
         }
@@ -937,27 +1171,65 @@ QByteArray ProtocolConfig::buildFrame(quint64 seq) const
     return finalFrame;
 }
 
-QByteArray ProtocolConfig::buildReplyFrame(quint64 seq, int extraLen) const
+// 辅助: 根据requestParams参数定义 + requestFrame原始字节, 解析出"参数名→字节"映射供EchoRequest查用
+static QMap<QString, QByteArray> buildEchoMap(const QVector<ProtocolParam> *requestParams,
+                                               const QByteArray &requestFrame)
 {
+    QMap<QString, QByteArray> m;
+    if (!requestParams || requestFrame.isEmpty()) return m;
+    int off = 0;
+    for (const auto &p : *requestParams) {
+        int sz = p.byteSize();
+        if (off + sz <= requestFrame.size() && !p.name.isEmpty()) {
+            m.insert(p.name, requestFrame.mid(off, sz));
+        }
+        off += sz;
+    }
+    return m;
+}
+
+QByteArray ProtocolConfig::buildReplyFrame(quint64 seq, int extraLen,
+                                           const QByteArray &requestFrame,
+                                           const QVector<ProtocolParam> *requestParams) const
+{
+    // 构建回显映射(EchoRequest动态字段查找)
+    QMap<QString, QByteArray> localEchoMap = buildEchoMap(requestParams, requestFrame);
+    const QMap<QString, QByteArray> *echoMap = localEchoMap.isEmpty() ? nullptr : &localEchoMap;
+
+    // 主动上报兼容: 如果replyConfig.headerParams/dataParams都为空, 回退用headerParams/dataParams作为发送集
+    // — 用户心智: "主动上报就是把这些字段按周期发出去", 不用区分"接收参数表/回复参数表"
+    //   这样用户在任何一张参数表里配的字段(含随机/Length/Checksum动态/StructArray数组随机)都能正确发送
+    const QVector<ProtocolParam> *sendHeaders = &replyConfig.headerParams;
+    const QVector<ProtocolParam> *sendData    = &replyConfig.dataParams;
+    if (sendHeaders->isEmpty() && sendData->isEmpty()) {
+        sendHeaders = &headerParams;
+        sendData    = &dataParams;
+    }
+
     // 构建回复数据区(支持随机值)
+    // 预分配: 先算总大小, 一次性reserve, 避免4000个参数每次append都realloc
+    int dataSize = 0;
+    for (const auto &p : *sendData) dataSize += p.byteSize();
     QByteArray dataArea;
-    for (const auto &p : replyConfig.dataParams) {
+    dataArea.reserve(dataSize + 16);
+    for (const auto &p : *sendData) {
         if (p.isRandom)
-            dataArea += p.toRandomBytes();
+            dataArea.append(p.toRandomBytes());
         else
-            dataArea += p.toBytes(seq, 0);
+            dataArea.append(p.toBytes(seq, 0, QByteArray(), -1, -1, -1, echoMap));
     }
 
     // 计算回复帧头总长度
     int headerSize = 0;
-    for (const auto &p : replyConfig.headerParams)
+    for (const auto &p : *sendHeaders)
         headerSize += p.byteSize();
 
     // 构建回复帧头
     QByteArray header;
-    for (const ProtocolParam &p : replyConfig.headerParams) {
+    header.reserve(headerSize + 16);
+    for (const ProtocolParam &p : *sendHeaders) {
         if (p.isRandom)
-            header += p.toRandomBytes();
+            header.append(p.toRandomBytes());
         else {
             // Length动态字段:
             //   dynamicParam==0 → 数据区长度
@@ -968,18 +1240,23 @@ QByteArray ProtocolConfig::buildReplyFrame(quint64 seq, int extraLen) const
                 len = dataArea.size() + headerSize;
             if (p.dynamicType == DynamicType::Length && extraLen > 0)
                 len += extraLen;
-            header += p.toBytes(seq, len);
+            header.append(p.toBytes(seq, len, QByteArray(), -1, -1, -1, echoMap));
         }
     }
 
-    QByteArray frame = header + dataArea;
+    QByteArray frame;
+    frame.reserve(headerSize + dataSize + 16);
+    frame.append(header);
+    frame.append(dataArea);
 
     // 第二遍: 校验和
+    // 预分配finalFrame: headerSize + dataSize, 避免append时realloc
     QByteArray finalFrame;
+    finalFrame.reserve(headerSize + dataSize + 16);
     int hdrOffset = 0;
-    for (const auto &p : replyConfig.headerParams) {
+    for (const auto &p : *sendHeaders) {
         if (p.dynamicType == DynamicType::Checksum) {
-            finalFrame += p.toBytes(seq, dataArea.size(), frame);
+            finalFrame += p.toBytes(seq, dataArea.size(), frame, -1, -1, -1, echoMap);
         } else {
             finalFrame += frame.mid(hdrOffset, p.byteSize());
         }

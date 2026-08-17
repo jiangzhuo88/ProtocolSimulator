@@ -616,9 +616,9 @@ void ProtocolEditDialog::setupUi()
     m_rplHdrGroup = new CollapsibleGroupBox("回复帧头参数 (右键支持复制/粘贴)");
     auto rplHdrContent = new QWidget;
     auto rplHdrLayout = new QVBoxLayout(rplHdrContent);
-    m_replyHeaderTable = new QTableWidget(0, 11);
-    m_replyHeaderTable->setHorizontalHeaderLabels({"名称","类型","字节序/长度","数组","默认值","动态类型","动态参数","随机","随机最小","随机最大","随机长度"});
-    for (int i = 0; i < 11; ++i)
+    m_replyHeaderTable = new QTableWidget(0, 12);
+    m_replyHeaderTable->setHorizontalHeaderLabels({"名称","类型","字节序/长度","数组","默认值","动态类型","动态参数","引用字段","随机","随机最小","随机最大","随机长度"});
+    for (int i = 0; i < 12; ++i)
         m_replyHeaderTable->horizontalHeader()->setSectionResizeMode(i, QHeaderView::Stretch);
     m_replyHeaderTable->setContextMenuPolicy(Qt::CustomContextMenu);
     rplHdrLayout->addWidget(m_replyHeaderTable);
@@ -636,9 +636,9 @@ void ProtocolEditDialog::setupUi()
     m_rplDataGroup = new CollapsibleGroupBox("回复数据区参数 (右键支持复制/粘贴)");
     auto rplDataContent = new QWidget;
     auto rplDataLayout = new QVBoxLayout(rplDataContent);
-    m_replyDataTable = new QTableWidget(0, 11);
-    m_replyDataTable->setHorizontalHeaderLabels({"名称","类型","字节序/长度","数组","默认值","动态类型","动态参数","随机","随机最小","随机最大","随机长度"});
-    for (int i = 0; i < 11; ++i)
+    m_replyDataTable = new QTableWidget(0, 12);
+    m_replyDataTable->setHorizontalHeaderLabels({"名称","类型","字节序/长度","数组","默认值","动态类型","动态参数","引用字段","随机","随机最小","随机最大","随机长度"});
+    for (int i = 0; i < 12; ++i)
         m_replyDataTable->horizontalHeader()->setSectionResizeMode(i, QHeaderView::Stretch);
     m_replyDataTable->setContextMenuPolicy(Qt::CustomContextMenu);
     rplDataLayout->addWidget(m_replyDataTable);
@@ -705,9 +705,9 @@ void ProtocolEditDialog::setupUi()
     // 包帧头参数
     auto mpHdrGroup = new QGroupBox("当前包帧头参数 (右键复制/粘贴; 动态类型可设PacketIndex/TotalPackets/PacketSize)");
     auto mpHdrLayout = new QVBoxLayout(mpHdrGroup);
-    m_mpHdrTable = new QTableWidget(0, 11);
-    m_mpHdrTable->setHorizontalHeaderLabels({"名称","类型","字节序/长度","数组","默认值","动态类型","动态参数","随机","随机最小","随机最大","随机长度"});
-    for (int i = 0; i < 11; ++i)
+    m_mpHdrTable = new QTableWidget(0, 12);
+    m_mpHdrTable->setHorizontalHeaderLabels({"名称","类型","字节序/长度","数组","默认值","动态类型","动态参数","引用字段","随机","随机最小","随机最大","随机长度"});
+    for (int i = 0; i < 12; ++i)
         m_mpHdrTable->horizontalHeader()->setSectionResizeMode(i, QHeaderView::Stretch);
     m_mpHdrTable->setContextMenuPolicy(Qt::CustomContextMenu);
     mpHdrLayout->addWidget(m_mpHdrTable);
@@ -723,9 +723,9 @@ void ProtocolEditDialog::setupUi()
     // 包数据区参数
     auto mpDataGroup = new QGroupBox("当前包数据区参数 (右键复制/粘贴)");
     auto mpDataLayout = new QVBoxLayout(mpDataGroup);
-    m_mpDataTable = new QTableWidget(0, 11);
-    m_mpDataTable->setHorizontalHeaderLabels({"名称","类型","字节序/长度","数组","默认值","动态类型","动态参数","随机","随机最小","随机最大","随机长度"});
-    for (int i = 0; i < 11; ++i)
+    m_mpDataTable = new QTableWidget(0, 12);
+    m_mpDataTable->setHorizontalHeaderLabels({"名称","类型","字节序/长度","数组","默认值","动态类型","动态参数","引用字段","随机","随机最小","随机最大","随机长度"});
+    for (int i = 0; i < 12; ++i)
         m_mpDataTable->horizontalHeader()->setSectionResizeMode(i, QHeaderView::Stretch);
     m_mpDataTable->setContextMenuPolicy(Qt::CustomContextMenu);
     mpDataLayout->addWidget(m_mpDataTable);
@@ -1069,7 +1069,7 @@ void ProtocolEditDialog::populateParamRow(QTableWidget *table, int row, const Pr
     auto dynCombo = new QComboBox;
     dynCombo->setFocusPolicy(Qt::StrongFocus);
     dynCombo->installEventFilter(wheelFilter);
-    for (int i = 0; i <= (int)DynamicType::TotalPackets; ++i)
+    for (int i = 0; i <= (int)DynamicType::EchoRequest; ++i)
         dynCombo->addItem(ProtocolParam::dynamicTypeToString((DynamicType)i));
     dynCombo->setCurrentIndex((int)param.dynamicType);
     table->setCellWidget(row, 5, dynCombo);
@@ -1094,6 +1094,7 @@ void ProtocolEditDialog::populateParamRow(QTableWidget *table, int row, const Pr
         case DynamicType::PacketIndex:  dynSpin->setToolTip("分包序号(自动填充当前包索引)"); break;
         case DynamicType::PacketSize:   dynSpin->setToolTip("分包大小(自动填充当前包负载字节数)"); break;
         case DynamicType::TotalPackets: dynSpin->setToolTip("总包数(自动填充)"); break;
+        case DynamicType::EchoRequest:  dynSpin->setToolTip("(回显无需参数, 请在引用字段列选择要回显的请求参数名)"); break;
         }
     };
     updateDynToolTip((int)param.dynamicType);
@@ -1102,25 +1103,65 @@ void ProtocolEditDialog::populateParamRow(QTableWidget *table, int row, const Pr
     });
 
     if (isReplyTable) {
-        // 随机 (7)
+        // 引用字段 (7) — 用于EchoRequest动态类型时选择要回显的请求帧参数名
+        // 候选项: 接收协议的headerParams + dataParams参数名
+        QStringList echoCandidates;
+        echoCandidates << ""; // 空选项(默认)
+        for (const auto &p : m_proto.headerParams)
+            if (!p.name.isEmpty()) echoCandidates << p.name;
+        for (const auto &p : m_proto.dataParams)
+            if (!p.name.isEmpty()) echoCandidates << p.name;
+        // 去重(保持顺序)
+        QStringList echoUniq;
+        QSet<QString> seen;
+        for (const auto &n : echoCandidates)
+            if (!seen.contains(n)) { seen.insert(n); echoUniq << n; }
+        auto echoCombo = new QComboBox;
+        echoCombo->setFocusPolicy(Qt::StrongFocus);
+        echoCombo->installEventFilter(wheelFilter);
+        echoCombo->addItems(echoUniq);
+        echoCombo->setToolTip("动态类型=EchoRequest时生效: 收到请求后, 回复时原样返回所选请求参数的字节");
+        // 若当前echoRefName不在候选项里, 说明引用的参数名已经被删/改名, 加进去(供用户看到旧配置)
+        if (!param.echoRefName.isEmpty() && echoUniq.indexOf(param.echoRefName) < 0)
+            echoCombo->addItem(param.echoRefName);
+        echoCombo->setCurrentText(param.echoRefName);
+        // 仅EchoRequest时启用, 否则禁用并清空(但保留配置值, 切换回来时可见)
+        bool echoEnabled = (param.dynamicType == DynamicType::EchoRequest);
+        echoCombo->setEnabled(echoEnabled);
+        connect(echoCombo, &QComboBox::currentTextChanged, this, &ProtocolEditDialog::onParamChanged);
+        table->setCellWidget(row, 7, echoCombo);
+        // dynCombo变化时联动echoCombo启用状态
+        connect(dynCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+                this, [this, table, row](int dIdx) {
+                    auto ec = qobject_cast<QComboBox*>(table->cellWidget(row, 7));
+                    if (!ec) return;
+                    bool en = ((DynamicType)dIdx == DynamicType::EchoRequest);
+                    ec->setEnabled(en);
+                    if (!en) {
+                        // 非EchoRequest不清空实际文本(保留配置供切换回EchoRequest时恢复)
+                        // 仅提示不生效
+                    }
+                });
+
+        // 随机 (8)
         auto randCheck = new QCheckBox;
         randCheck->setChecked(param.isRandom);
-        table->setCellWidget(row, 7, randCheck);
+        table->setCellWidget(row, 8, randCheck);
         connect(randCheck, &QCheckBox::toggled, this, &ProtocolEditDialog::onParamChanged);
 
-        // 随机最小 (8)
+        // 随机最小 (9)
         auto *itemRandMin = new QTableWidgetItem(param.randomMin);
-        table->setItem(row, 8, itemRandMin);
+        table->setItem(row, 9, itemRandMin);
 
-        // 随机最大 (9)
+        // 随机最大 (10)
         auto *itemRandMax = new QTableWidgetItem(param.randomMax);
-        table->setItem(row, 9, itemRandMax);
+        table->setItem(row, 10, itemRandMax);
 
-        // 随机长度 (10)
+        // 随机长度 (11)
         auto randLenSpin = new QSpinBox;
         randLenSpin->setRange(1, 9999);
         randLenSpin->setValue(param.randomLength);
-        table->setCellWidget(row, 10, randLenSpin);
+        table->setCellWidget(row, 11, randLenSpin);
         connect(randLenSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &ProtocolEditDialog::onParamChanged);
     } else {
         // 匹配 (7)
@@ -1211,13 +1252,18 @@ ProtocolParam ProtocolEditDialog::readParamRow(QTableWidget *table, int row, boo
     if (dynSpin) param.dynamicParam = dynSpin->value();
 
     if (isReplyTable) {
-        auto randCheck = qobject_cast<QCheckBox*>(table->cellWidget(row, 7));
+        // 引用字段 (7): EchoRequest时指向请求参数名
+        auto echoCombo = qobject_cast<QComboBox*>(table->cellWidget(row, 7));
+        if (echoCombo) param.echoRefName = echoCombo->currentText().trimmed();
+
+        // 随机 (8)
+        auto randCheck = qobject_cast<QCheckBox*>(table->cellWidget(row, 8));
         if (randCheck) param.isRandom = randCheck->isChecked();
 
-        param.randomMin = table->item(row, 8) ? table->item(row, 8)->text() : "";
-        param.randomMax = table->item(row, 9) ? table->item(row, 9)->text() : "";
+        param.randomMin = table->item(row, 9) ? table->item(row, 9)->text() : "";
+        param.randomMax = table->item(row, 10) ? table->item(row, 10)->text() : "";
 
-        auto randLenSpin = qobject_cast<QSpinBox*>(table->cellWidget(row, 10));
+        auto randLenSpin = qobject_cast<QSpinBox*>(table->cellWidget(row, 11));
         if (randLenSpin) param.randomLength = randLenSpin->value();
     } else {
         auto matchCheck = qobject_cast<QCheckBox*>(table->cellWidget(row, 7));
@@ -2105,6 +2151,11 @@ void ProtocolEditDialog::updateMatchHighlight(QTableWidget *table)
 
 void ProtocolEditDialog::updatePreview()
 {
+    // 预览模式哨兵: 构造时进入预览模式, 函数结束(即使抛异常退出)时自动恢复
+    // 预览期间 ProtocolParam::toRandomBytes 返回 0xA5/0x5A 占位 pattern, 不生成真随机
+    // — 2000频点/大数组预览帧生成时间从 ~100ms → <1ms, 真实收发不受影响
+    PreviewModeSentry previewSentry;
+
     // 取消pending防抖: 本函数已直接刷新, 避免定时器再触发一次重复刷新
     m_previewDirty = false;
     m_previewTimer->stop();
