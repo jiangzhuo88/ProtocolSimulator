@@ -494,7 +494,7 @@ void ProtocolEditDialog::setupUi()
     auto recvLayout = new QVBoxLayout(recvTab);
 
     // 帧头参数
-    m_hdrGroup = new CollapsibleGroupBox;
+    m_hdrGroup = new CollapsibleGroupBox(tr("帧头参数 (右键支持复制/粘贴)"));
     auto hdrContent = new QWidget;
     auto hdrLayout = new QVBoxLayout(hdrContent);
     m_headerTable = new QTableWidget(0, 11);
@@ -514,7 +514,7 @@ void ProtocolEditDialog::setupUi()
     recvLayout->addWidget(m_hdrGroup);
 
     // 数据区参数
-    m_dataGroup = new CollapsibleGroupBox;
+    m_dataGroup = new CollapsibleGroupBox(tr("数据区参数 (右键支持复制/粘贴)"));;
     auto dataContent = new QWidget;
     auto dataLayout = new QVBoxLayout(dataContent);
     m_dataTable = new QTableWidget(0, 11);
@@ -626,7 +626,7 @@ void ProtocolEditDialog::setupUi()
     replyLayout->addLayout(modeLayout);
 
     // 回复帧头参数
-    m_rplHdrGroup = new CollapsibleGroupBox;
+    m_rplHdrGroup = new CollapsibleGroupBox(tr("回复帧头参数 (右键支持复制/粘贴)"));
     auto rplHdrContent = new QWidget;
     auto rplHdrLayout = new QVBoxLayout(rplHdrContent);
     m_replyHeaderTable = new QTableWidget(0, 12);
@@ -646,7 +646,7 @@ void ProtocolEditDialog::setupUi()
     replyLayout->addWidget(m_rplHdrGroup);
 
     // 回复数据区参数
-    m_rplDataGroup = new CollapsibleGroupBox;
+    m_rplDataGroup = new CollapsibleGroupBox(tr("回复数据区参数 (右键支持复制/粘贴)"));
     auto rplDataContent = new QWidget;
     auto rplDataLayout = new QVBoxLayout(rplDataContent);
     m_replyDataTable = new QTableWidget(0, 12);
@@ -672,7 +672,7 @@ void ProtocolEditDialog::setupUi()
     replyLayout->addLayout(rplUtilLayout);
 
     // ====== 多包配置(多包回复模式: 发送区帧发送后, 按列表顺序逐包下发; 每包独立配置字段) ======
-    m_multiPktGroup = new CollapsibleGroupBox;
+    m_multiPktGroup = new CollapsibleGroupBox(tr("多包配置 (多包回复模式: 发送区帧后依次发送各包; 每包独立配置, 字段动态类型可设=包序号/总包数/包大小)"));
     auto mpContent = new QWidget;
     auto mpLayout = new QVBoxLayout(mpContent);
 
@@ -793,7 +793,7 @@ void ProtocolEditDialog::setupUi()
     mainLayout->addWidget(m_tabWidget);
 
     // ====== 帧预览 ======
-    m_previewGroup = new CollapsibleGroupBox;
+    m_previewGroup = new CollapsibleGroupBox(tr("帧预览"));
     auto previewContent = new QWidget;
     auto previewLayout = new QVBoxLayout(previewContent);
     previewLayout->setContentsMargins(0, 0, 0, 0);
@@ -872,8 +872,8 @@ void ProtocolEditDialog::retranslateUi()
         m_tabWidget->setTabText(m_tabMultiIdx, tr("多包配置"));
     }
 
-    if (m_hdrGroup) m_hdrGroup->setTitle(tr("帧头参数 (右键支持复制/粘贴)"));
-    if (m_dataGroup) m_dataGroup->setTitle(tr("数据区参数 (右键支持复制/粘贴)"));
+//    if (m_hdrGroup) m_hdrGroup->setTitle(tr("帧头参数 (右键支持复制/粘贴)"));
+//    if (m_dataGroup) m_dataGroup->setTitle(tr("数据区参数 (右键支持复制/粘贴)"));
     if (m_btnAddHdr) m_btnAddHdr->setText(tr("添加帧头参数"));
     if (m_btnDelHdr) m_btnDelHdr->setText(tr("删除选中"));
     if (m_btnAddData) m_btnAddData->setText(tr("添加数据区参数"));
@@ -903,15 +903,15 @@ void ProtocolEditDialog::retranslateUi()
         m_replyModeCombo->setCurrentIndex(idx);
     }
 
-    if (m_rplHdrGroup) m_rplHdrGroup->setTitle(tr("回复帧头参数 (右键支持复制/粘贴)"));
-    if (m_rplDataGroup) m_rplDataGroup->setTitle(tr("回复数据区参数 (右键支持复制/粘贴)"));
+//    if (m_rplHdrGroup) m_rplHdrGroup->setTitle(tr("回复帧头参数 (右键支持复制/粘贴)"));
+//    if (m_rplDataGroup) m_rplDataGroup->setTitle(tr("回复数据区参数 (右键支持复制/粘贴)"));
     if (m_btnAddRplHdr) m_btnAddRplHdr->setText(tr("添加回复帧头参数"));
     if (m_btnDelRplHdr) m_btnDelRplHdr->setText(tr("删除选中"));
     if (m_btnAddRplData) m_btnAddRplData->setText(tr("添加回复数据区参数"));
     if (m_btnDelRplData) m_btnDelRplData->setText(tr("删除选中"));
     if (m_btnRplSwap) m_btnRplSwap->setText(tr("一键切换所有字段大小端"));
 
-    if (m_multiPktGroup) m_multiPktGroup->setTitle(tr("多包配置 (多包回复模式: 发送区帧后依次发送各包; 每包独立配置, 字段动态类型可设=包序号/总包数/包大小)"));
+//    if (m_multiPktGroup) m_multiPktGroup->setTitle(tr("多包配置 (多包回复模式: 发送区帧后依次发送各包; 每包独立配置, 字段动态类型可设=包序号/总包数/包大小)"));
     if (m_lblMpInterval) m_lblMpInterval->setText(tr("包间间隔(ms):"));
     if (m_mpIntervalSpin) m_mpIntervalSpin->setToolTip(tr("相邻包发送间隔; 单包若设了delayMs则以包级延迟优先"));
     if (m_mpCycleCheck) m_mpCycleCheck->setText(tr("多包循环(配合回复周期: 周期模式下每轮回到包1重发)"));
@@ -928,7 +928,7 @@ void ProtocolEditDialog::retranslateUi()
     if (m_btnAddMpData) m_btnAddMpData->setText(tr("添加数据区参数"));
     if (m_btnDelMpData) m_btnDelMpData->setText(tr("删除选中"));
 
-    if (m_previewGroup) m_previewGroup->setTitle(tr("帧预览"));
+//    if (m_previewGroup) m_previewGroup->setTitle(tr("帧预览"));
     if (m_lblRecvPreview) m_lblRecvPreview->setText(tr("接收帧(组包结果):"));
     if (m_lblReplyPreviewTitle) m_lblReplyPreviewTitle->setText(tr("回复帧(组包结果):"));
 

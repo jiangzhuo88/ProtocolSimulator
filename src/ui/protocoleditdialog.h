@@ -11,6 +11,7 @@
 #include <QLabel>
 #include <QTabWidget>
 #include <QListWidget>
+#include <QGroupBox>
 #include "collapsiblegroupbox.h"
 #include "WheelEventFilter.h"
 #include "../core/protocoltypes.h"

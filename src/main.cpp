@@ -142,91 +142,46 @@ QToolTip { background: #2c3e50; color: #ffffff; border: none; padding: 4px 8px; 
 )";
 
 // ===== 国际化: 全局翻译器管理 =====
-static QTranslator *g_QtTranslator  = nullptr; // Qt自带控件翻译(OK/取消/文件对话框等)
+enum Language {
+    Chinese  = 0,
+    English  = 1
+};
 QTranslator       *g_appTranslator = nullptr; // ProtocolSimulator应用级翻译
-static QString    g_currentLang    = "zh";    // "zh" | "en"
-
-static QString s_langSettingFile()
-{
-    // 简单保存在应用目录的 .lang 文本, 不依赖独立settings
-    return QApplication::applicationDirPath() + "/.language";
-}
-
-static bool s_loadLangFileIfExists(QTranslator *t, const QString &lang)
-{
-    // 1) 内嵌资源 :/translations/ProtocolSimulator_xx.qm
-    const QString res = QString(":/translations/ProtocolSimulator_%1.qm").arg(lang);
-    if (QFile::exists(res) && t->load(res)) return true;
-    // 2) 可执行文件目录 translations/ProtocolSimulator_xx.qm (方便用户替换, 不重编译)
-    const QString disk = QApplication::applicationDirPath()
-                       + QString("/translations/ProtocolSimulator_%1.qm").arg(lang);
-    if (QFile::exists(disk) && t->load(disk)) return true;
-    return false;
-}
-
+static Language    g_currentLang    = Chinese;    // "zh" | "en"
 // 在MainWindow里由菜单调用: zh/en
-void switchAppLanguage(const QString &langCode)
+void switchAppLanguage(const Language &lang)
 {
-    QString code = (langCode == "en") ? "en" : "zh";
-    if (code == g_currentLang && g_appTranslator) return;
+    if (lang == g_currentLang) return;
 
-    QApplication *app = qobject_cast<QApplication*>(QCoreApplication::instance());
-    if (!app) return;
-
-    // --- 卸载已装的翻译 ---
+    // 移除旧的翻译器
     if (g_appTranslator) {
-        app->removeTranslator(g_appTranslator);
+        qApp->removeTranslator(g_appTranslator);
         delete g_appTranslator;
         g_appTranslator = nullptr;
     }
-    if (g_QtTranslator) {
-        app->removeTranslator(g_QtTranslator);
-        delete g_QtTranslator;
-        g_QtTranslator = nullptr;
-    }
 
-    g_currentLang = code;
-    // 保存选择(下次启动自动切)
-    QFile f(s_langSettingFile());
-    if (f.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) {
-        f.write(code.toUtf8());
-        f.close();
+    // 英文模式：加载 .qm 翻译文件
+    if (lang == English) {
+        g_appTranslator = new QTranslator();
+        // 优先从 Qt 资源系统加载
+        bool loaded = g_appTranslator->load(":/translations/ProtocolSimulator_en.qm");
+        if (!loaded) {
+            // 回退：从可执行文件同目录加载
+            QString appDir = QCoreApplication::applicationDirPath();
+            loaded = g_appTranslator->load("ProtocolSimulator_en.qm", appDir + "/translations");
+        }
+        if (loaded) {
+            qApp->installTranslator(g_appTranslator);
+        }
     }
+    // 中文模式：不加载翻译器，直接使用源字符串
 
-    if (code == "en") {
-        // 应用翻译
-        g_appTranslator = new QTranslator(app);
-        s_loadLangFileIfExists(g_appTranslator, "en");
-        app->installTranslator(g_appTranslator);
-
-        // Qt基础对话框翻译: 可选地加载Qt自己的en翻译(默认系统已处理, 但资源内嵌qt_en.qm也可)
-        // 这里只留指针, 不加载默认英文也能用
-        g_QtTranslator = new QTranslator(app);
-        const QString qtRes = QString(":/translations/qtbase_%1.qm").arg(code);
-        if (QFile::exists(qtRes) && g_QtTranslator->load(qtRes))
-            app->installTranslator(g_QtTranslator);
-    }
-    // zh: 不装自定义翻译 -> 走源代码中的中文原文(源字符串就是中文, zero-copy)
+    g_currentLang = lang;
 }
-
 // 获取当前语言代码: "zh" | "en" —— 供MainWindow更新语言菜单勾选状态用
-QString currentAppLanguage()
+Language currentAppLanguage()
 {
     return g_currentLang;
-}
-
-static QString s_initialLangChoice()
-{
-    QFile f(s_langSettingFile());
-    if (f.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        QString saved = QString::fromUtf8(f.readAll()).trimmed().toLower();
-        f.close();
-        if (saved == "en" || saved == "zh") return saved;
-    }
-    // 没有保存过, 就按系统语言: 非中文系统 → 默认英文
-    const QString sysLang = QLocale::system().name().toLower();  // "zh_cn", "en_us", ...
-    if (sysLang.startsWith("zh")) return "zh";
-    return "en";
 }
 
 int main(int argc, char *argv[])
@@ -237,7 +192,7 @@ int main(int argc, char *argv[])
     a.setApplicationName("ProtocolSimulator");
 
     // 启动时用保存语言或系统语言, 先切换一次(卸载/安装流程都是统一的)
-    switchAppLanguage(s_initialLangChoice());
+    switchAppLanguage(English);
 
     MainWindow w;
     w.show();

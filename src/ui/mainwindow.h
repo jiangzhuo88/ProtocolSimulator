@@ -72,10 +72,10 @@ private:
     QGroupBox   *m_protoGroup;
     QGroupBox   *m_logGroup;
 
-    // 语言菜单
-    QAction     *m_actLangZh;
-    QAction     *m_actLangEn;
-    QActionGroup *m_langGroup;  // 让中英文选项互斥选中
+//    // 语言菜单
+//    QAction     *m_actLangZh;
+//    QAction     *m_actLangEn;
+//    QActionGroup *m_langGroup;  // 让中英文选项互斥选中
 };
 
 #endif // MAINWINDOW_H

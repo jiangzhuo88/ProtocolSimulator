@@ -5,7 +5,7 @@ TARGET = ProtocolSimulator
 TEMPLATE = app
 
 CONFIG += c++11
-DESTDIR = $$PWD/bin/
+DESTDIR = $$PWD/ProtocolSimulator/
 
 INCLUDEPATH += src/core src/ui
 INCLUDEPATH += $$PWD/src/ZDDS/include

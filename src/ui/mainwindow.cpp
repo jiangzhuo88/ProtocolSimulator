@@ -25,8 +25,8 @@ extern QString currentAppLanguage();    // main.cpp中定义
 
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent), m_server(nullptr), m_currentSceneIndex(-1),
-      m_sceneGroup(nullptr), m_protoGroup(nullptr), m_logGroup(nullptr),
-      m_actLangZh(nullptr), m_actLangEn(nullptr), m_langGroup(nullptr)
+      m_sceneGroup(nullptr), m_protoGroup(nullptr), m_logGroup(nullptr)
+//      ,m_actLangZh(nullptr), m_actLangEn(nullptr), m_langGroup(nullptr)
 {
     setupUi();
     setWindowTitle(tr("模拟训练软件"));
@@ -58,24 +58,24 @@ void MainWindow::setupUi()
 {
     auto central = new QWidget;
     auto mainLayout = new QVBoxLayout(central);
-
+//    switchAppLanguage("en");
     // 语言菜单栏(即使当前不是翻译环境, 也预留入口; 切语言后会重写文字)
-    auto *langMenu = menuBar()->addMenu(tr("语言"));
-    m_langGroup = new QActionGroup(this);
-    m_langGroup->setExclusive(true);
-    m_actLangZh = langMenu->addAction(tr("中文"));
-    m_actLangEn = langMenu->addAction(tr("English"));
-    m_actLangZh->setCheckable(true);
-    m_actLangEn->setCheckable(true);
-    m_langGroup->addAction(m_actLangZh);
-    m_langGroup->addAction(m_actLangEn);
-    m_actLangZh->setChecked(true);
-    connect(m_actLangZh, &QAction::triggered, this, []() {
-        switchAppLanguage("zh");
-    });
-    connect(m_actLangEn, &QAction::triggered, this, []() {
-        switchAppLanguage("en");
-    });
+//    auto *langMenu = menuBar()->addMenu(tr("语言"));
+//    m_langGroup = new QActionGroup(this);
+//    m_langGroup->setExclusive(true);
+//    m_actLangZh = langMenu->addAction(tr("中文"));
+//    m_actLangEn = langMenu->addAction(tr("English"));
+//    m_actLangZh->setCheckable(true);
+//    m_actLangEn->setCheckable(true);
+//    m_langGroup->addAction(m_actLangZh);
+//    m_langGroup->addAction(m_actLangEn);
+//    m_actLangZh->setChecked(true);
+//    connect(m_actLangZh, &QAction::triggered, this, []() {
+//        switchAppLanguage("zh");
+//    });
+//    connect(m_actLangEn, &QAction::triggered, this, []() {
+//        switchAppLanguage("en");
+//    });
 
     // 工具栏
     auto toolbarLayout = new QHBoxLayout;
@@ -163,16 +163,16 @@ void MainWindow::retranslateUi()
         if (!actions.isEmpty())
             actions.first()->setText(tr("语言"));
     }
-    if (m_actLangZh) m_actLangZh->setText(tr("中文"));
-    if (m_actLangEn) m_actLangEn->setText(tr("English"));
+//    if (m_actLangZh) m_actLangZh->setText(tr("中文"));
+//    if (m_actLangEn) m_actLangEn->setText(tr("English"));
     // 更新语言菜单勾选状态 (当前语言选项被check)
-    const QString curLang = currentAppLanguage();
-    if (m_actLangZh && m_actLangEn) {
-        const QSignalBlocker b1(m_actLangZh);
-        const QSignalBlocker b2(m_actLangEn);
-        m_actLangZh->setChecked(curLang == "zh");
-        m_actLangEn->setChecked(curLang == "en");
-    }
+//    const QString curLang = currentAppLanguage();
+    //    if (m_actLangZh && m_actLangEn) {
+    //        const QSignalBlocker b1(m_actLangZh);
+    //        const QSignalBlocker b2(m_actLangEn);
+    //        m_actLangZh->setChecked(curLang == "zh");
+    //        m_actLangEn->setChecked(curLang == "en");
+    //    }
 
     m_btnSceneMgmt->setText(tr("场景管理"));
     m_btnAddProto  ->setText(tr("添加协议"));

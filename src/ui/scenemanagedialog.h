@@ -6,6 +6,8 @@
 #include <QLineEdit>
 #include <QSpinBox>
 #include <QPushButton>
+#include <QGroupBox>
+#include <QLabel>
 #include "../core/configmanager.h"
 
 class SceneManageDialog : public QDialog

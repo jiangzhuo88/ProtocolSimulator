@@ -420,7 +420,7 @@ void SimConnection::sendMultiPackets(const ProtocolConfig &proto,
 
     // 1. 发送发送区回复帧(每包都发, 构成完整闭环)
     //    分包模式: Length动态字段 = 回复区(包头+数据区) + 本包(包头+数据区); 不分包时extraLen=0
-    QByteArray replyFrame = proto.buildReplyFrame(seq, pktFrame.size(), requestFrame, requestParams);
+    QByteArray replyFrame = proto.buildReplyFrame(seq, pktFrame.size(), requestFrame, rpPtr);
 //    m_socket->write(replyFrame);
 //    emit dataSent(replyFrame, addr);
 //    emit logMessage(QString("[多包闭环 %1/%2] 发送区回复帧: %3")
