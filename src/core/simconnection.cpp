@@ -38,7 +38,7 @@ void SimConnection::onReadyRead()
 
     QString addr = m_socket->peerAddress().toString() + ":" + QString::number(m_socket->peerPort());
     emit dataReceived(data, addr);
-    emit logMessage(QString("[收] %1: %2").arg(addr).arg(QString::fromLatin1(data.toHex(' '))));
+    emit logMessage(tr("[收] %1: %2").arg(addr).arg(QString::fromLatin1(data.toHex(' '))));
 
     tryMatch();
 }
@@ -89,7 +89,7 @@ void SimConnection::tryMatch()
 
         if (matched) {
             QString addr = m_socket->peerAddress().toString() + ":" + QString::number(m_socket->peerPort());
-            emit logMessage(QString("[匹配] 协议 '%1' 匹配成功").arg(proto.name));
+            emit logMessage(tr("[匹配] 协议 '%1' 匹配成功").arg(proto.name));
 
             // --- EchoRequest回显上下文 ---
             // matchedFrame: 匹配到的请求帧原始字节(按前面offset累加得到的完整帧长截取)
@@ -103,14 +103,14 @@ void SimConnection::tryMatch()
 
             // 如果该协议匹配时需要停止所有周期回复
             if (proto.stopAllPeriodicOnMatch) {
-                emit logMessage(QString("[停止] 协议 '%1' 触发停止指令，停止所有周期回复").arg(proto.name));
+                emit logMessage(tr("[停止] 协议 '%1' 触发停止指令，停止所有周期回复").arg(proto.name));
                 stopAllPeriodicReplies();
             }
 
             // 停止指定协议的周期回复
             if (!proto.stopPeriodicProtocolNames.isEmpty()) {
                 for (const auto &name : proto.stopPeriodicProtocolNames) {
-                    emit logMessage(QString("[停止] 协议 '%1' 触发停止指令，停止协议 '%2' 的周期回复").arg(proto.name).arg(name));
+                    emit logMessage(tr("[停止] 协议 '%1' 触发停止指令，停止协议 '%2' 的周期回复").arg(proto.name).arg(name));
                     stopPeriodicReplyByName(name);
                 }
             }
@@ -123,7 +123,7 @@ void SimConnection::tryMatch()
                 // 多包闭环模式: 每包=发送区回复帧+本包多包帧, 一起发
                 if (!reply.multiPackets.isEmpty()) {
                     auto packets = QSharedPointer<QVector<MultiPacketItem>>::create(reply.multiPackets);
-                    emit logMessage(QString("[多包] 协议 '%1' 开始下发 %2 个闭环包")
+                    emit logMessage(tr("[多包] 协议 '%1' 开始下发 %2 个闭环包")
                                     .arg(proto.name).arg(packets->size()));
                     sendMultiPackets(proto, packets, 0, m_seqNumber, reply.multiPacketIntervalMs,
                                      -1, false, matchedFrame, mergedRequestParams);
@@ -132,7 +132,7 @@ void SimConnection::tryMatch()
                     QByteArray replyData = proto.buildReplyFrame(m_seqNumber++, 0, matchedFrame, rpPtr);
                     m_socket->write(replyData);
                     emit dataSent(replyData, addr);
-                    emit logMessage(QString("[发] %1: %2").arg(addr).arg(QString::number(replyData.count())));
+                    emit logMessage(tr("[发] %1: %2").arg(addr).arg(QString::number(replyData.count())));
                 }
             } else if (effMode == ReplyMode::Periodic1s) {
                 startPeriodicReply(i, 1000, matchedFrame, mergedRequestParams);
@@ -215,7 +215,7 @@ void SimConnection::startPeriodicReply(int protoIndex, int intervalMs,
             prEntry.mpRoundInProgress = true;
             if (prEntry.timer) prEntry.timer->stop();   // 停掉定时器, 等本轮发完再重启计时
             auto packets = QSharedPointer<QVector<MultiPacketItem>>::create(proto.replyConfig.multiPackets);
-            emit logMessage(QString("[多包循环] 协议 '%1' 周期触发, 发送 %2 个闭环包")
+            emit logMessage(tr("[多包循环] 协议 '%1' 周期触发, 发送 %2 个闭环包")
                             .arg(proto.name).arg(packets->size()));
             sendMultiPackets(proto, packets, 0, m_seqNumber, proto.replyConfig.multiPacketIntervalMs,
                              protoIndex, true, savedReqFrame, savedReqParams);
@@ -248,14 +248,14 @@ void SimConnection::startPeriodicReply(int protoIndex, int intervalMs,
             qint64 writeNs = twrite.nsecsElapsed();
             emit dataSent(replyData, addr);
             if (replyData.size() > 512 || buildNs > 1000000LL || !fromPrebuilt) {
-                emit logMessage(QString("[性能] '%1' %2B  构建:%3μs  write:%4μs  %5")
+                emit logMessage(tr("[性能] '%1' %2B  构建:%3μs  write:%4μs  %5")
                                 .arg(proto.name)
                                 .arg(replyData.size())
                                 .arg(fromPrebuilt ? 0 : buildNs / 1000)
                                 .arg(writeNs / 1000)
-                                .arg(fromPrebuilt ? QStringLiteral("(预构建)") : QStringLiteral("(同步降级)")));
+                                .arg(fromPrebuilt ? tr("(预构建)") : tr("(同步降级)")));
             }
-            emit logMessage(QString("[发] %1: %2").arg(addr).arg(QString::number(replyData.count())));
+            emit logMessage(tr("[发] %1: %2").arg(addr).arg(QString::number(replyData.count())));
         }
     };
 
@@ -273,7 +273,7 @@ void SimConnection::startPeriodicReply(int protoIndex, int intervalMs,
     // 立即发送一次
     doReply();
 
-    emit logMessage(QString("[周期回复] 协议 '%1' 开始周期回复, 间隔%2ms")
+    emit logMessage(tr("[周期回复] 协议 '%1' 开始周期回复, 间隔%2ms")
                     .arg(m_protocols[protoIndex].name).arg(intervalMs));
 }
 
@@ -429,7 +429,7 @@ void SimConnection::sendMultiPackets(const ProtocolConfig &proto,
     QByteArray byteResult = replyFrame + pktFrame;
     m_socket->write(byteResult);
     emit dataSent(byteResult, addr);
-    emit logMessage(QString("[多包闭环 %1/%2] 本包多包帧: %3")
+    emit logMessage(tr("[多包闭环 %1/%2] 本包多包帧: %3")
                     .arg(startIndex + 1).arg(total)
                     .arg(QString::number(byteResult.count())));
 //                    .arg(QString::fromLatin1(pktFrame.toHex(' '))));

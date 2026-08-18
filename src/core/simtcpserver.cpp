@@ -18,12 +18,12 @@ bool SimTcpServer::start(int port)
     m_server = new QTcpServer(this);
     connect(m_server, &QTcpServer::newConnection, this, &SimTcpServer::onNewConnection);
     if (!m_server->listen(QHostAddress::Any, port)) {
-        emit logMessage(QString("[错误] 无法监听端口 %1: %2").arg(port).arg(m_server->errorString()));
+        emit logMessage(tr("[错误] 无法监听端口 %1: %2").arg(port).arg(m_server->errorString()));
         delete m_server;
         m_server = nullptr;
         return false;
     }
-    emit logMessage(QString("[服务] TCP服务已启动, 监听端口 %1").arg(port));
+    emit logMessage(tr("[服务] TCP服务已启动, 监听端口 %1").arg(port));
     return true;
 }
 
@@ -78,6 +78,6 @@ void SimTcpServer::onNewConnection()
 
         QString addr = socket->peerAddress().toString() + ":" + QString::number(socket->peerPort());
         emit clientConnected(addr);
-        emit logMessage(QString("[连接] 客户端已连接: %1").arg(addr));
+        emit logMessage(tr("[连接] 客户端已连接: %1").arg(addr));
     }
 }

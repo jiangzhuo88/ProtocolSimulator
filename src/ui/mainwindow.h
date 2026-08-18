@@ -8,6 +8,10 @@
 #include <QPushButton>
 #include <QLabel>
 #include <QCheckBox>
+#include <QLineEdit>
+#include <QGroupBox>
+#include <QAction>
+#include <QActionGroup>
 #include "../core/configmanager.h"
 #include "../core/simtcpserver.h"
 #include "ZDDSProtolcol.h"
@@ -31,8 +35,13 @@ private slots:
     void onProtocolDoubleClicked(int row, int col);
     void onTestBtnClicked();
 
+protected:
+    // 运行时语言切换: 安装/卸载QTranslator后收到此事件
+    void changeEvent(QEvent *e) override;
+
 private:
     void setupUi();
+    void retranslateUi();   // 重设所有已创建界面上的用户可见文本(切语言时会再调)
     void refreshSceneList();
     void refreshProtocolTable();
     void updateServiceStatus();
@@ -58,7 +67,16 @@ private:
     QPushButton *m_btnEditProto;
     QPushButton *m_btnCopyProto;
     QPushButton *m_btnDelProto;
-    QLabel *m_statusLabel;
+    QLabel      *m_statusLabel;
+    QGroupBox   *m_sceneGroup;
+    QGroupBox   *m_protoGroup;
+    QGroupBox   *m_logGroup;
+
+    // 语言菜单
+    QAction     *m_actLangZh;
+    QAction     *m_actLangEn;
+    QActionGroup *m_langGroup;  // 让中英文选项互斥选中
 };
 
 #endif // MAINWINDOW_H
+

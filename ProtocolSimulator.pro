@@ -13,6 +13,16 @@ LIBS += -L$$PWD/src/ZDDS/lib -lZDDSd
 LIBS += -L$$PWD/src/ZDDS/lib -lzmq
 
 system(cp -r "$$PWD/src/ZDDS/lib/lib*.so*" "$$DESTDIR")
+
+# ===== 国际化: 翻译文件 + 构建时生成qm =====
+TRANSLATIONS += translations/ProtocolSimulator_en.ts
+
+# 先运行 build_qm.py 生成 .qm, 再让下面的 RESOURCES/qrc 能找到它
+# 注: 若 python3 不可用, 请手动执行: python3 scripts/build_qm.py translations/ProtocolSimulator_en.ts
+system(python3 $$PWD/scripts/build_qm.py $$PWD/translations/ProtocolSimulator_en.ts $$PWD/translations/ProtocolSimulator_en.qm)
+
+RESOURCES += translations/translations.qrc
+
 SOURCES += \
     src/core/ZDDSMgr.cpp \
     src/core/ZDDSProtolcol.cpp \

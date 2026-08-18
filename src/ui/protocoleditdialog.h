@@ -24,6 +24,7 @@ public:
 
 protected:
     bool eventFilter(QObject *obj, QEvent *event) override;
+    void changeEvent(QEvent *e) override;
 
 private slots:
     void onAddHeaderParam();
@@ -69,6 +70,7 @@ private:
     void updateMatchHighlight(QTableWidget *table);
     // 标记预览脏, 由防抖定时器延迟刷新(避免每次单元格编辑都全量重建)
     void markPreviewDirty();
+    void retranslateUi();
 
     // 参数表操作: isReplyTable=true表示回复表(无匹配列, 有随机列)
     void populateParamRow(QTableWidget *table, int row, const ProtocolParam &param, bool isReplyTable);
@@ -139,6 +141,29 @@ private:
 
     bool m_loading; // 加载中标志, 防止onParamChanged覆盖数据
     WheelEventFilter *wheelFilter;
+
+    // 翻译支持: 需要retranslate的控件指针
+    QLabel *m_lblName, *m_lblDesc, *m_lblPushInterval, *m_lblFixedFrameLen;
+    QLabel *m_lblReplyMode;
+    QLabel *m_lblStopList;
+    QPushButton *m_btnAddHdr, *m_btnDelHdr;
+    QPushButton *m_btnAddData, *m_btnDelData;
+    QPushButton *m_btnCopyHeader, *m_btnCopyData, *m_btnCopyAll;
+    QPushButton *m_btnSwapByteOrder;
+    QPushButton *m_btnSelectAll, *m_btnDeselectAll;
+    QPushButton *m_btnAddRplHdr, *m_btnDelRplHdr;
+    QPushButton *m_btnAddRplData, *m_btnDelRplData;
+    QPushButton *m_btnRplSwap;
+    QLabel *m_lblMpInterval;
+    QPushButton *m_btnAddMp, *m_btnDelMp, *m_btnMpUp, *m_btnMpDown;
+    QGroupBox *m_mpHdrGroup, *m_mpDataGroup;
+    QPushButton *m_btnAddMpHdr, *m_btnDelMpHdr;
+    QPushButton *m_btnAddMpData, *m_btnDelMpData;
+    CollapsibleGroupBox *m_hdrGroup, *m_dataGroup, *m_previewGroup;
+    QTabWidget *m_tabWidget;
+    int m_tabRecvIdx, m_tabActionIdx, m_tabReplyIdx, m_tabMultiIdx;
+    QLabel *m_lblRecvPreview, *m_lblReplyPreviewTitle;
+    QPushButton *m_btnOk, *m_btnCancel;
 };
 
 #endif // PROTOCOLEDITDIALOG_H

@@ -14,6 +14,9 @@ class SceneManageDialog : public QDialog
 public:
     explicit SceneManageDialog(ConfigManager *config, QWidget *parent = nullptr);
 
+protected:
+    void changeEvent(QEvent *e) override;
+
 private slots:
     void onAddScene();
     void onRemoveScene();
@@ -23,6 +26,7 @@ private slots:
 private:
     void setupUi();
     void refreshList();
+    void retranslateUi();
 
     ConfigManager *m_config;
     QListWidget *m_list;
@@ -31,6 +35,10 @@ private:
     QPushButton *m_btnAdd;
     QPushButton *m_btnRemove;
     QPushButton *m_btnApply;
+    QGroupBox *m_listGroup;
+    QGroupBox *m_editGroup;
+    QLabel *m_nameLabel;
+    QLabel *m_portLabel;
 };
 
 #endif // SCENEMANAGEDIALOG_H
