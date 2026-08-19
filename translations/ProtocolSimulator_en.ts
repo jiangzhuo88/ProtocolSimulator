@@ -766,46 +766,49 @@ When array&gt;1, Default Value column becomes editable array widget</translation
     </message>
     <message>
         <source>勾选后，该协议匹配成功时会停止所有正在运行的周期回复</source>
-        <translation type="unfinished"></translation>
+        <translation>When checked, matching this protocol stops all running periodic replies</translation>
     </message>
     <message>
         <source>添加回复帧头参数</source>
-        <translation type="unfinished"></translation>
+        <translation>Add Reply Header Param</translation>
     </message>
     <message>
         <source>添加回复数据区参数</source>
-        <translation type="unfinished"></translation>
+        <translation>Add Reply Data Param</translation>
     </message>
     <message>
         <source>动态类型=EchoRequest时生效: 收到请求后, 回复时原样返回所选请求参数的字节</source>
-        <translation type="unfinished"></translation>
+        <translation>Active when DynamicType=EchoRequest: on receiving a request, returns the selected request param bytes as-is in the reply</translation>
     </message>
     <message>
         <source>参数%1</source>
-        <translation type="unfinished"></translation>
+        <translation>Param%1</translation>
     </message>
     <message>
         <source>编辑结构体(%1字段,%2B/个)</source>
-        <translation type="unfinished"></translation>
+        <translation>Edit Struct (%1 fields, %2B each)</translation>
     </message>
     <message>
         <source>点击编辑结构体成员字段定义
 每字段可独立设类型/字节序/随机范围
 内存布局: field0[0] field1[0] field0[1] field1[1] ... (交错)</source>
-        <translation type="unfinished"></translation>
+        <translation>Click to edit struct member field definitions
+Each field can have independent type/byte order/random range
+Memory layout: field0[0] field1[0] field0[1] field1[1] ... (interleaved)</translation>
     </message>
     <message>
         <source>编辑数组(%1项,已填%2)</source>
-        <translation type="unfinished"></translation>
+        <translation>Edit Array (%1 items, %2 filled)</translation>
     </message>
     <message>
         <source>点击编辑每个数组元素的值
 支持全部填充、序列生成</source>
-        <translation type="unfinished"></translation>
+        <translation>Click to edit each array element value
+Supports fill-all and sequence generation</translation>
     </message>
     <message>
         <source>Hex(如 41542E)或文本; 大数据点右侧按钮</source>
-        <translation type="unfinished"></translation>
+        <translation>Hex (e.g. 41542E) or text; large data point right-side button</translation>
     </message>
     <message>
         <source>打开大数据编辑对话框
@@ -813,19 +816,23 @@ When array&gt;1, Default Value column becomes editable array widget</translation
 - 可从文件加载二进制数据
 - 可选择字节范围[起始,结束)
 - 确定后按选中范围回填Hex</source>
-        <translation type="unfinished"></translation>
+        <translation>Open large data editor dialog
+- Shows current hex content
+- Can load binary data from file
+- Select byte range [start, end)
+- Confirmed range is filled back as Hex</translation>
     </message>
     <message>
         <source>已加载范围: %1字节</source>
-        <translation type="unfinished"></translation>
+        <translation>Loaded range: %1 bytes</translation>
     </message>
     <message>
         <source>文件(%1B)</source>
-        <translation type="unfinished"></translation>
+        <translation>File (%1B)</translation>
     </message>
     <message>
         <source>点击重新打开编辑对话框</source>
-        <translation type="unfinished"></translation>
+        <translation>Click to reopen the edit dialog</translation>
     </message>
     <message>
         <source>值</source>
@@ -833,115 +840,115 @@ When array&gt;1, Default Value column becomes editable array widget</translation
     </message>
     <message>
         <source>%1: %2</source>
-        <translation type="unfinished"></translation>
+        <translation>%1: %2</translation>
     </message>
     <message>
         <source>复制整表</source>
-        <translation type="unfinished"></translation>
+        <translation>Copy All</translation>
     </message>
     <message>
         <source>清空整表</source>
-        <translation type="unfinished"></translation>
+        <translation>Clear All</translation>
     </message>
     <message>
         <source>&lt;font color=&apos;red&apos;&gt; [警告:未加载数据,%1字节将用0填充,请点&quot;文件&quot;按钮加载真实数据!]&lt;/font&gt;</source>
-        <translation type="unfinished"></translation>
+        <translation>&lt;font color=&apos;red&apos;&gt; [Warning: No data loaded, %1 bytes will be zero-filled. Click &quot;File&quot; button to load real data!]&lt;/font&gt;</translation>
     </message>
     <message>
         <source> ... (共%1字节, 已省略)</source>
-        <translation type="unfinished"></translation>
+        <translation> ... (total %1 bytes, omitted)</translation>
     </message>
     <message>
         <source>帧头:</source>
-        <translation type="unfinished"></translation>
+        <translation>Header:</translation>
     </message>
     <message>
         <source>期望范围</source>
-        <translation type="unfinished"></translation>
+        <translation>Expected Range</translation>
     </message>
     <message>
         <source>掩码</source>
-        <translation type="unfinished"></translation>
+        <translation>Mask</translation>
     </message>
     <message>
         <source>期望</source>
-        <translation type="unfinished"></translation>
+        <translation>Expected</translation>
     </message>
     <message>
         <source>偏移</source>
-        <translation type="unfinished"></translation>
+        <translation>Offset</translation>
     </message>
     <message>
         <source>字节</source>
-        <translation type="unfinished"></translation>
+        <translation>Bytes</translation>
     </message>
     <message>
         <source>数据区:</source>
-        <translation type="unfinished"></translation>
+        <translation>Data:</translation>
     </message>
     <message>
         <source>完整帧</source>
-        <translation type="unfinished"></translation>
+        <translation>Full Frame</translation>
     </message>
     <message>
         <source>固定帧长度</source>
-        <translation type="unfinished"></translation>
+        <translation>Fixed Frame Length</translation>
     </message>
     <message>
         <source>匹配时按此长度消费buffer</source>
-        <translation type="unfinished"></translation>
+        <translation>Consume buffer by this length on match</translation>
     </message>
     <message>
         <source>发送区(主回复帧)</source>
-        <translation type="unfinished"></translation>
+        <translation>Send Area (Main Reply Frame)</translation>
     </message>
     <message>
         <source>无多包配置, 仅发送发送区帧</source>
-        <translation type="unfinished"></translation>
+        <translation>No multi-packet config, only send main reply frame</translation>
     </message>
     <message>
         <source>多包闭环</source>
-        <translation type="unfinished"></translation>
+        <translation>Multi-Packet Loop</translation>
     </message>
     <message>
         <source>共</source>
-        <translation type="unfinished"></translation>
+        <translation>Total</translation>
     </message>
     <message>
         <source>包</source>
-        <translation type="unfinished"></translation>
+        <translation>pkts</translation>
     </message>
     <message>
         <source>, 间隔</source>
-        <translation type="unfinished"></translation>
+        <translation>, interval</translation>
     </message>
     <message>
         <source>ms (每包=发送区回复帧+本包多包帧)</source>
-        <translation type="unfinished"></translation>
+        <translation>ms (each pkt = reply frame + multi-packet frame)</translation>
     </message>
     <message>
         <source>多包循环已开启, 配合周期模式每轮重发</source>
-        <translation type="unfinished"></translation>
+        <translation>Multi-packet loop enabled, replays each cycle in periodic mode</translation>
     </message>
     <message>
         <source>闭环%1</source>
-        <translation type="unfinished"></translation>
+        <translation>Loop%1</translation>
     </message>
     <message>
         <source>回复帧</source>
-        <translation type="unfinished"></translation>
+        <translation>Reply Frame</translation>
     </message>
     <message>
         <source>多包帧</source>
-        <translation type="unfinished"></translation>
+        <translation>Multi-Packet Frame</translation>
     </message>
     <message>
         <source>Length含本包大小</source>
-        <translation type="unfinished"></translation>
+        <translation>Length includes this packet size</translation>
     </message>
     <message>
         <source>包, 省略</source>
-        <translation type="unfinished"></translation>
+        <translation>pkt, omit</translation>
     </message>
 </context>
 <context>
@@ -980,7 +987,7 @@ When array&gt;1, Default Value column becomes editable array widget</translation
     </message>
     <message>
         <source>帧头:</source>
-        <translation type="unfinished"></translation>
+        <translation>Header:</translation>
     </message>
     <message>
         <source>随机</source>
@@ -988,11 +995,11 @@ When array&gt;1, Default Value column becomes editable array widget</translation
     </message>
     <message>
         <source>范围</source>
-        <translation type="unfinished"></translation>
+        <translation>Range</translation>
     </message>
     <message>
         <source>偏移</source>
-        <translation type="unfinished"></translation>
+        <translation>Offset</translation>
     </message>
     <message>
         <source>值</source>
@@ -1000,15 +1007,15 @@ When array&gt;1, Default Value column becomes editable array widget</translation
     </message>
     <message>
         <source>数据区:</source>
-        <translation type="unfinished"></translation>
+        <translation>Data:</translation>
     </message>
     <message>
         <source>完整帧</source>
-        <translation type="unfinished"></translation>
+        <translation>Full Frame</translation>
     </message>
     <message>
         <source>字节</source>
-        <translation type="unfinished"></translation>
+        <translation>Bytes</translation>
     </message>
 </context>
 <context>
@@ -1197,4 +1204,14 @@ Example: field a=Int16 random[-2000,-1500], field b=Int16 random[1,100], arrayCo
         <translation>Random Max</translation>
     </message>
 </context>
+
+<!-- ==================== ZTextEdit ==================== -->
+<context>
+    <name>ZTextEdit</name>
+    <message>
+        <source>清空</source>
+        <translation>Clear</translation>
+    </message>
+</context>
+
 </TS>

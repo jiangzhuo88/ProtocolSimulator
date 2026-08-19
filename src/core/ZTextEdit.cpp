@@ -22,7 +22,7 @@ ZTextEdit::ZTextEdit(QWidget *parent)
 void ZTextEdit::contextMenuEvent(QContextMenuEvent *event)
 {
     QMenu menu(this);
-    QAction* actClear = menu.addAction("清空");
+    QAction* actClear = menu.addAction(tr("清空"));
     connect(actClear,&QAction::triggered,this,[this]()
     {
         this->clear();
